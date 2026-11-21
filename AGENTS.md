@@ -2,6 +2,7 @@
 
 ## Build
 
+- Use familiar words in the app: call the list a feed, and label it Nearby.
 - Build native SwiftUI for iOS only. Borrow behavior from Vybe, not its web UI, AI services, or enrichment workflows.
 - Use MapKit first. Rely on public APIs; don’t scrape or assume Place Card data is available to app code.
 - Prefer removing code to adding layers. Add dependencies or network calls only when the feature needs them. Measure before claiming a speedup.

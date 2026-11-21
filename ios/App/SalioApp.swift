@@ -3,11 +3,11 @@ import SwiftUI
 @main
 struct SalioApp: App {
     var body: some Scene {
-        WindowGroup { BoardView() }
+        WindowGroup { FeedView() }
     }
 }
 
-private struct BoardEntry: Decodable, Identifiable {
+private struct FeedEntry: Decodable, Identifiable {
     let id: String
     let name: String
     let category: String
@@ -16,14 +16,14 @@ private struct BoardEntry: Decodable, Identifiable {
     let leaveBy: Date
 }
 
-private struct BoardView: View {
-    @State private var entries: [BoardEntry] = []
+private struct FeedView: View {
+    @State private var entries: [FeedEntry] = []
     @State private var loading = true
     @State private var failed = false
-    @State private var selectedID: BoardEntry.ID?
+    @State private var selectedID: FeedEntry.ID?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
 
-    private var selectedPlace: BoardEntry? {
+    private var selectedPlace: FeedEntry? {
         entries.first { $0.id == selectedID } ?? entries.first
     }
 
@@ -46,8 +46,7 @@ private struct BoardView: View {
                 if loading {
                     ProgressView("Loading nearby places")
                 } else if failed {
-                    ContentUnavailableView("Board unavailable", systemImage: "wifi.slash",
-                                           description: Text("Couldn’t load the sample places."))
+                    ContentUnavailableView("Can’t load places", systemImage: "wifi.slash")
                 } else if entries.isEmpty {
                     ContentUnavailableView("Nothing nearby", systemImage: "mappin.slash")
                 }
@@ -57,7 +56,7 @@ private struct BoardView: View {
         .task { await load() }
     }
 
-    private func placeRow(_ entry: BoardEntry) -> some View {
+    private func placeRow(_ entry: FeedEntry) -> some View {
         let selected = selectedPlace?.id == entry.id
         return Button {
             selectedID = entry.id
@@ -109,7 +108,7 @@ private struct BoardView: View {
         do {
             guard let value = ProcessInfo.processInfo.environment["SALIO_API_URL"],
                   let baseURL = URL(string: value) else { throw URLError(.badURL) }
-            let url = baseURL.appending(components: "v1", "sample-board")
+            let url = baseURL.appending(components: "v1", "sample-feed")
             let (data, response) = try await URLSession.shared.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                 throw URLError(.badServerResponse)
@@ -117,7 +116,7 @@ private struct BoardView: View {
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             decoder.dateDecodingStrategy = .iso8601
-            entries = try decoder.decode([BoardEntry].self, from: data)
+            entries = try decoder.decode([FeedEntry].self, from: data)
         } catch {
             failed = true
         }

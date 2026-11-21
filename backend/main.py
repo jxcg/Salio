@@ -16,7 +16,7 @@ class Place(BaseModel):
     closes_at: datetime
 
 
-class BoardEntry(Place):
+class FeedEntry(Place):
     leave_by: datetime
 
 
@@ -27,8 +27,8 @@ SAMPLE_PLACES = (
 )
 
 
-@app.get("/v1/sample-board", response_model=list[BoardEntry])
-def sample_board(at: AwareDatetime | None = None) -> list[BoardEntry]:
+@app.get("/v1/sample-feed", response_model=list[FeedEntry])
+def sample_feed(at: AwareDatetime | None = None) -> list[FeedEntry]:
     now = at if at is not None else DEMO_TIME
     places = [
         Place(
@@ -44,5 +44,5 @@ def sample_board(at: AwareDatetime | None = None) -> list[BoardEntry]:
     for place in places:
         leave_by = place.closes_at - MIN_STAY - timedelta(minutes=place.walk_minutes)
         if leave_by >= now:
-            entries.append(BoardEntry(**place.model_dump(), leave_by=leave_by))
+            entries.append(FeedEntry(**place.model_dump(), leave_by=leave_by))
     return sorted(entries, key=lambda entry: entry.leave_by)
