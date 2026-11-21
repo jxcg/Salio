@@ -1,0 +1,31 @@
+name: Salio
+options:
+  deploymentTarget:
+    iOS: '18.0'
+targets:
+  Salio:
+    type: application
+    platform: iOS
+    sources: App
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: Salio
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SALIO_BUNDLE_ID)
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SWIFT_VERSION: '6.0'
