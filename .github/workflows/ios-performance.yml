@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'ios/**'
+      - '.github/scripts/performance_report.py'
       - '.github/workflows/ios-performance.yml'
 
 permissions:
@@ -57,4 +58,4 @@ jobs:
             xcrun xcresulttool get test-results metrics --path "$work/$side.xcresult" > "$work/$side.json"
           done
 
-          python3 ios/performance_report.py "$work/base.json" "$work/pr.json"
+          python3 .github/scripts/performance_report.py "$work/base.json" "$work/pr.json"
