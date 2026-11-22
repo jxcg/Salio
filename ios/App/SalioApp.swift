@@ -51,6 +51,7 @@ struct LivePlace: Identifiable, Equatable {
     let id: String
     let name: String
     let address: String
+    let category: MKPointOfInterestCategory?
     let latitude: Double
     let longitude: Double
 
@@ -114,6 +115,7 @@ struct MapKitPlaceSearcher: PlaceSearching {
                 id: id,
                 name: name,
                 address: address,
+                category: item.pointOfInterestCategory,
                 latitude: coordinate.latitude,
                 longitude: coordinate.longitude
             )
@@ -123,8 +125,10 @@ struct MapKitPlaceSearcher: PlaceSearching {
 
 struct StubPlaceSearcher: PlaceSearching {
     static let fixedPlaces = [
-        LivePlace(id: "stub-cafe", name: "Stub Café", address: "1 Stub Street", latitude: 51.5128, longitude: -0.1300),
-        LivePlace(id: "stub-cinema", name: "Stub Cinema", address: "2 Stub Street", latitude: 51.5160, longitude: -0.1238),
+        LivePlace(id: "stub-cafe", name: "Stub Café", address: "1 Stub Street", category: .cafe,
+                  latitude: 51.5128, longitude: -0.1300),
+        LivePlace(id: "stub-cinema", name: "Stub Cinema", address: "2 Stub Street", category: .movieTheater,
+                  latitude: 51.5160, longitude: -0.1238),
     ]
 
     var results: [LivePlace]
@@ -164,12 +168,30 @@ final class SearchModel {
         await load(.text(text, near: center))
     }
 
-    func load(_ request: PlaceRequest) async {
+    func loadNearby(near center: CLLocationCoordinate2D, matching categories: Set<MKPointOfInterestCategory>) async {
+        await load(.nearby(center), prioritizing: categories)
+    }
+
+    private func load(_ request: PlaceRequest, prioritizing categories: Set<MKPointOfInterestCategory> = []) async {
         guard status != .searching else { return }
         searchCount += 1
         status = .searching
         do {
-            results = try await searcher.search(request)
+            let places = try await searcher.search(request)
+            if categories.isEmpty {
+                results = places
+            } else {
+                var matches: [LivePlace] = []
+                var others: [LivePlace] = []
+                for place in places {
+                    if let category = place.category, categories.contains(category) {
+                        matches.append(place)
+                    } else {
+                        others.append(place)
+                    }
+                }
+                results = matches + others
+            }
             status = results.isEmpty ? .empty : .results
         } catch {
             results = []
@@ -488,7 +510,8 @@ private struct FeedView: View {
         didLocate = true
         guard let center, search.searchCount == searchCount, !initial || searchCount == 0 else { return }
         if !initial { search.query = "" }
-        await search.load(.nearby(center))
+        let preferences = try? profileContainer.get().mainContext.fetch(FetchDescriptor<Preferences>()).first
+        await search.loadNearby(near: center, matching: preferences?.nearbyCategories ?? [])
     }
 
     private func currentLocation() async -> CLLocationCoordinate2D? {

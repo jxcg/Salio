@@ -69,6 +69,7 @@ final class SalioUITests: XCTestCase {
     func testProfileSavesAndResetsAcrossAppRelaunches() {
         continueAfterFailure = false
         let app = XCUIApplication()
+        app.launchArguments += ["-SALIOStubSearch", "-SALIOStubLocation"]
         app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = UUID().uuidString
         app.launch()
 
@@ -100,6 +101,11 @@ final class SalioUITests: XCTestCase {
 
         app.terminate()
         app.launch()
+        let cinema = app.buttons["stub-cinema"]
+        let cafe = app.buttons["stub-cafe"]
+        XCTAssertTrue(cinema.waitForExistence(timeout: 10))
+        XCTAssertTrue(cafe.exists)
+        XCTAssertLessThan(cinema.frame.midY, cafe.frame.midY)
         profile.tap()
         XCTAssertEqual(film.value as? String, "1")
         XCTAssertEqual(budget.value as? String, "££")
@@ -114,6 +120,9 @@ final class SalioUITests: XCTestCase {
 
         app.terminate()
         app.launch()
+        XCTAssertTrue(cafe.waitForExistence(timeout: 10))
+        XCTAssertTrue(cinema.exists)
+        XCTAssertLessThan(cafe.frame.midY, cinema.frame.midY)
         profile.tap()
         XCTAssertEqual(film.value as? String, "0")
         XCTAssertEqual(budget.value as? String, "Not set")
