@@ -1,5 +1,6 @@
 import XCTest
 
+@MainActor
 final class SalioUITests: XCTestCase {
     func testNearbySharesPlacesAndSelectionWithMapWithoutFetchingAgain() {
         let app = launch(arguments: ["-SALIOStubSearch", "-SALIOStubLocation", "-SALIOShowSearchCount"])
@@ -31,6 +32,13 @@ final class SalioUITests: XCTestCase {
         searchField(in: app).typeText("coffee\n")
         XCTAssertTrue(app.buttons["stub-cafe"].waitForExistence(timeout: 10))
         XCTAssertEqual(searchCount(in: app), 1)
+    }
+
+    func testSamplePlacesAppearWithoutServerConfiguration() {
+        let app = launch(arguments: ["-SALIOStubSearch"])
+
+        XCTAssertTrue(app.staticTexts["The Picture House"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["North Street Gallery"].exists)
     }
 
     func testSubmittingNonEmptyQueryRunsOneSearchAndSelectionSurvivesLifecycle() {

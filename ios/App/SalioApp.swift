@@ -10,13 +10,27 @@ struct SalioApp: App {
     }
 }
 
-struct FeedEntry: Decodable, Identifiable {
+struct FeedEntry: Identifiable {
     let id: String
     let name: String
     let category: String
     let walkMinutes: Int
     let closesAt: Date
     let leaveBy: Date
+
+    static let samples: [FeedEntry] = {
+        let demoStart = Date(timeIntervalSince1970: 1_893_520_800) // 2030-01-01 18:00 UTC
+        return [
+            FeedEntry(
+                id: "cinema", name: "The Picture House", category: "Cinema", walkMinutes: 8,
+                closesAt: demoStart.addingTimeInterval(79 * 60), leaveBy: demoStart.addingTimeInterval(11 * 60)
+            ),
+            FeedEntry(
+                id: "gallery", name: "North Street Gallery", category: "Art", walkMinutes: 14,
+                closesAt: demoStart.addingTimeInterval(154 * 60), leaveBy: demoStart.addingTimeInterval(80 * 60)
+            ),
+        ]
+    }()
 }
 
 struct LivePlace: Identifiable, Equatable {
@@ -170,8 +184,7 @@ private enum Selection: Hashable {
 }
 
 private struct FeedView: View {
-    @State private var entries: [FeedEntry] = []
-    @State private var sampleFailed = false
+    private let entries = FeedEntry.samples
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
@@ -232,7 +245,6 @@ private struct FeedView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .task { await loadSamples() }
         .task { await locate(initial: true) }
         .onChange(of: search.results) {
             camera = .automatic
@@ -253,14 +265,9 @@ private struct FeedView: View {
                     .accessibilityIdentifier("search-count")
             }
             searchSections
-            if !entries.isEmpty || sampleFailed {
-                Section("Sample places") {
-                    if sampleFailed {
-                        Text("Can’t load sample places.").foregroundStyle(.secondary)
-                    }
-                    ForEach(entries) { entry in
-                        sampleRow(entry)
-                    }
+            Section("Sample places") {
+                ForEach(entries) { entry in
+                    sampleRow(entry)
                 }
             }
         }
@@ -438,23 +445,5 @@ private struct FeedView: View {
             return nil
         }
         return nil
-    }
-
-    private func loadSamples() async {
-        guard let value = ProcessInfo.processInfo.environment["SALIO_API_URL"],
-              let baseURL = URL(string: value) else { return }
-        do {
-            let url = baseURL.appending(components: "v1", "sample-feed")
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                throw URLError(.badServerResponse)
-            }
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            decoder.dateDecodingStrategy = .iso8601
-            entries = try decoder.decode([FeedEntry].self, from: data)
-        } catch {
-            sampleFailed = true
-        }
     }
 }
