@@ -222,9 +222,15 @@ private enum Selection: Hashable {
 private struct FeedView: View {
     let profileContainer: Result<ModelContainer, any Error>
     private let entries = FeedEntry.samples
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
+    @State private var wasClosed = false
+    @State private var hingeOpen = false
+    @State private var showContextCue = false
     @State private var showingProfile = false
     @State private var center: CLLocationCoordinate2D?
     @State private var locating = false
@@ -244,7 +250,43 @@ private struct FeedView: View {
         return search.results.first { $0.id == id }
     }
 
-    var body: some View {
+    private var allowsContextCue: Bool {
+        !reduceMotion && !voiceOver && contrast != .increased
+    }
+
+    @ViewBuilder var body: some View {
+        // Build without hinge support on toolchains that predate the Duo SDK.
+        #if compiler(>=6.4.2)
+        if #available(iOS 27.1, *) {
+            splitView.onHingeChange { old, new in
+                let status = new.hinge?.status
+                guard old.hinge?.status != status else { return }
+                hingeOpen = status == .fullyOpen
+                showContextCue = hingeOpen && wasClosed && allowsContextCue
+                if status == .closed {
+                    wasClosed = true
+                } else if status == .fullyOpen || status == nil {
+                    wasClosed = false
+                }
+            }
+            .task(id: showContextCue) {
+                guard showContextCue else { return }
+                do {
+                    try await Task.sleep(for: .milliseconds(25))
+                    withAnimation(.easeOut(duration: 0.125)) { showContextCue = false }
+                } catch {
+                    // Closing cancels the cue; there is nothing to finish.
+                }
+            }
+        } else {
+            splitView
+        }
+        #else
+        splitView
+        #endif
+    }
+
+    private var splitView: some View {
         NavigationSplitView(preferredCompactColumn: $compactColumn) {
             placeContext
         } detail: {
@@ -441,7 +483,7 @@ private struct FeedView: View {
         List {
             if let sample = selectedSample {
                 Section {
-                    Text(sample.name).font(.headline)
+                    contextTitle(sample.name)
                     LabeledContent("Walk", value: "\(sample.walkMinutes) min")
                     LabeledContent("Closes", value: sample.closesAt.formatted(date: .omitted, time: .shortened))
                 } footer: {
@@ -449,7 +491,7 @@ private struct FeedView: View {
                 }
             } else if let live = selectedLive {
                 Section {
-                    Text(live.name).font(.headline)
+                    contextTitle(live.name)
                     LabeledContent("Address", value: live.address)
                 }
             }
@@ -491,5 +533,24 @@ private struct FeedView: View {
             return nil
         }
         return nil
+    }
+
+    private func contextTitle(_ name: String) -> some View {
+        Text(name).font(.headline)
+            .overlay(alignment: .leading) {
+                ZStack {
+                    if showContextCue {
+                        Rectangle()
+                            .fill(Color.accentColor.opacity(0.12))
+                            .frame(width: 2, height: 18)
+                            .colorEffect(ShaderLibrary.contextAccent(.boundingRect))
+                            .offset(x: -6)
+                            .transition(.asymmetric(insertion: .identity, removal: .opacity))
+                    }
+                }
+                .opacity(hingeOpen && allowsContextCue ? 1 : 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
     }
 }
