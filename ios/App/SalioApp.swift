@@ -212,7 +212,6 @@ private struct FeedView: View {
                     placeList
                 }
             }
-            .navigationTitle("Nearby")
             .navigationBarBackButtonHidden()
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {

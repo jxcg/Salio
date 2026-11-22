@@ -6,12 +6,14 @@ final class SalioUITests: XCTestCase {
         let cafe = app.buttons["stub-cafe"]
         XCTAssertTrue(cafe.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["stub-cinema"].exists)
+        XCTAssertFalse(app.staticTexts["Nearby"].exists)
         XCTAssertEqual(searchCount(in: app), 1)
 
         app.buttons["show-map"].tap()
         let cinemaPin = app.buttons["pin-stub-cinema"]
         XCTAssertTrue(cinemaPin.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["pin-stub-cafe"].exists)
+        XCTAssertFalse(app.staticTexts["Nearby"].exists)
         cinemaPin.tap()
         app.buttons["show-list"].tap()
         XCTAssertTrue(app.buttons["stub-cinema"].isSelected)
