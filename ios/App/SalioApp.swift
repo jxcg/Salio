@@ -1,11 +1,26 @@
+import CoreLocation
 import MapKit
 import os
+import SwiftData
 import SwiftUI
 
 @main
 struct SalioApp: App {
+    private let profileContainer = Result {
+        try ModelContainer(for: Preferences.self, configurations: Self.profileStore)
+    }
+
     var body: some Scene {
-        WindowGroup { FeedView() }
+        WindowGroup { FeedView(profileContainer: profileContainer) }
+    }
+
+    private static var profileStore: ModelConfiguration {
+        #if DEBUG
+        if let name = ProcessInfo.processInfo.environment["SALIO_PROFILE_TEST_STORE"] {
+            return ModelConfiguration(name, cloudKitDatabase: .none)
+        }
+        #endif
+        return ModelConfiguration(cloudKitDatabase: .none)
     }
 }
 
@@ -36,27 +51,71 @@ struct LivePlace: Identifiable, Equatable {
     let id: String
     let name: String
     let address: String
+    let latitude: Double
+    let longitude: Double
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+enum PlaceRequest: Sendable {
+    case nearby(CLLocationCoordinate2D)
+    case text(String, near: CLLocationCoordinate2D?)
 }
 
 protocol PlaceSearching: Sendable {
-    func search(_ query: String) async throws -> [LivePlace]
+    func search(_ request: PlaceRequest) async throws -> [LivePlace]
 }
 
 struct MapKitPlaceSearcher: PlaceSearching {
-    func search(_ query: String) async throws -> [LivePlace] {
+    private static let nearbyRadiusMeters: CLLocationDistance = 1_000
+    private static let nearbyCategories: [MKPointOfInterestCategory] = [
+        .cafe, .bakery, .restaurant, .brewery, .nightlife, .foodMarket,
+        .museum, .movieTheater, .theater, .musicVenue, .landmark,
+        .park, .beach, .zoo, .aquarium, .amusementPark,
+    ]
+
+    func search(_ request: PlaceRequest) async throws -> [LivePlace] {
         #if DEBUG
         Logger(subsystem: Bundle.main.bundleIdentifier ?? "salio", category: "search").notice("MapKit search start")
         #endif
-        var request = MKLocalSearch.Request()
-        request.naturalLanguageQuery = query
-        let response = try await MKLocalSearch(request: request).start()
+        let search: MKLocalSearch
+        switch request {
+        case .nearby(let center):
+            let request = MKLocalPointsOfInterestRequest(center: center, radius: Self.nearbyRadiusMeters)
+            request.pointOfInterestFilter = MKPointOfInterestFilter(including: Self.nearbyCategories)
+            search = MKLocalSearch(request: request)
+        case .text(let query, let center):
+            let request = MKLocalSearch.Request()
+            request.naturalLanguageQuery = query
+            if let center {
+                let span = Self.nearbyRadiusMeters * 2
+                request.region = MKCoordinateRegion(center: center, latitudinalMeters: span, longitudinalMeters: span)
+            }
+            search = MKLocalSearch(request: request)
+        }
+        let response = try await search.start()
+        var seen = Set<LivePlace.ID>()
         return response.mapItems.compactMap { item in
             guard let name = item.name else { return nil }
-            let coordinate = item.placemark.coordinate
+            let coordinate: CLLocationCoordinate2D
+            let address: String
+            if #available(iOS 26, *) {
+                coordinate = item.location.coordinate
+                address = item.address?.fullAddress ?? ""
+            } else {
+                coordinate = item.placemark.coordinate
+                address = item.placemark.title ?? ""
+            }
+            let id = item.identifier?.rawValue ?? "\(name)@\(coordinate.latitude),\(coordinate.longitude)"
+            guard seen.insert(id).inserted else { return nil }
             return LivePlace(
-                id: "\(name)@\(coordinate.latitude),\(coordinate.longitude)",
+                id: id,
                 name: name,
-                address: item.placemark.title ?? ""
+                address: address,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude
             )
         }
     }
@@ -64,14 +123,14 @@ struct MapKitPlaceSearcher: PlaceSearching {
 
 struct StubPlaceSearcher: PlaceSearching {
     static let fixedPlaces = [
-        LivePlace(id: "stub-cafe", name: "Stub Café", address: "1 Stub Street"),
-        LivePlace(id: "stub-cinema", name: "Stub Cinema", address: "2 Stub Street"),
+        LivePlace(id: "stub-cafe", name: "Stub Café", address: "1 Stub Street", latitude: 51.5128, longitude: -0.1300),
+        LivePlace(id: "stub-cinema", name: "Stub Cinema", address: "2 Stub Street", latitude: 51.5160, longitude: -0.1238),
     ]
 
     var results: [LivePlace]
     var error: (any Error)?
 
-    func search(_ query: String) async throws -> [LivePlace] {
+    func search(_ request: PlaceRequest) async throws -> [LivePlace] {
         if let error { throw error }
         return results
     }
@@ -99,15 +158,21 @@ final class SearchModel {
         self.searcher = searcher
     }
 
-    func submit() async {
+    func submit(near center: CLLocationCoordinate2D? = nil) async {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, status != .searching else { return }
+        guard !text.isEmpty else { return }
+        await load(.text(text, near: center))
+    }
+
+    func load(_ request: PlaceRequest) async {
+        guard status != .searching else { return }
         searchCount += 1
         status = .searching
         do {
-            results = try await searcher.search(text)
+            results = try await searcher.search(request)
             status = results.isEmpty ? .empty : .results
         } catch {
+            results = []
             status = .failed
         }
     }
@@ -133,6 +198,7 @@ private enum Selection: Hashable {
 }
 
 private struct FeedView: View {
+    let profileContainer: Result<ModelContainer, any Error>
     private let entries = FeedEntry.samples
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -143,6 +209,12 @@ private struct FeedView: View {
     @State private var wasClosed = false
     @State private var hingeOpen = false
     @State private var showContextCue = false
+    @State private var showingProfile = false
+    @State private var center: CLLocationCoordinate2D?
+    @State private var locating = false
+    @State private var didLocate = false
+    @State private var showMap = false
+    @State private var camera: MapCameraPosition = .automatic
 
     private var selectedSample: FeedEntry? {
         if let selection, case .sample(let id) = selection, let entry = entries.first(where: { $0.id == id }) {
@@ -196,31 +268,114 @@ private struct FeedView: View {
         NavigationSplitView(preferredCompactColumn: $compactColumn) {
             placeContext
         } detail: {
-            List {
-                Section {
-                    TextField("Search places", text: $search.query, prompt: Text("Search places"))
-                        .submitLabel(.search)
-                        .onSubmit { Task { await search.submit() } }
-                        .accessibilityIdentifier("search-field")
-                }
-                searchSections
-                Section("Sample places") {
-                    ForEach(entries) { entry in
-                        sampleRow(entry)
-                    }
+            Group {
+                if showMap, search.status == .results {
+                    placesMap
+                        .safeAreaInset(edge: .bottom) {
+                            if let place = selectedLive {
+                                rowLabel(title: place.name, subtitle: place.address, leaveBy: nil, selected: false)
+                                    .padding(.horizontal)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(.regularMaterial)
+                            }
+                        }
+                } else {
+                    placeList
                 }
             }
-            .navigationTitle("Nearby")
             .navigationBarBackButtonHidden()
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if !showMap, center != nil {
+                        Button("Refresh nearby", systemImage: "arrow.clockwise") {
+                            Task { await locate(initial: false) }
+                        }
+                        .disabled(locating || search.status == .searching)
+                        .accessibilityIdentifier("refresh-nearby")
+                    }
+                    if search.status == .results {
+                        Button(showMap ? "Show list" : "Show map", systemImage: showMap ? "list.bullet" : "map") {
+                            showMap.toggle()
+                        }
+                        .accessibilityIdentifier(showMap ? "show-list" : "show-map")
+                    }
+                    Button("Profile", systemImage: "person.crop.circle") { showingProfile = true }
+                }
+            }
         }
         .navigationSplitViewStyle(.balanced)
+        .sheet(isPresented: $showingProfile) {
+            switch profileContainer {
+            case .success(let container): ProfileView().modelContainer(container)
+            case .failure: ContentUnavailableView("Profile unavailable", systemImage: "person.crop.circle")
+            }
+        }
+        .task { await locate(initial: true) }
+        .onChange(of: search.results) {
+            camera = .automatic
+        }
+    }
+
+    private var placeList: some View {
+        List {
+            Section {
+                TextField("Search places", text: $search.query, prompt: Text("Search places"))
+                    .submitLabel(.search)
+                    .onSubmit { Task { await search.submit(near: center) } }
+                    .disabled(search.status == .searching)
+                    .accessibilityIdentifier("search-field")
+            }
+            if showSearchCountInstrument {
+                Text("Searches: \(search.searchCount)")
+                    .accessibilityIdentifier("search-count")
+            }
+            searchSections
+            Section("Sample places") {
+                ForEach(entries) { entry in
+                    sampleRow(entry)
+                }
+            }
+        }
+    }
+
+    private var placesMap: some View {
+        Map(position: $camera) {
+            ForEach(search.results) { place in
+                let selected = selection == .live(place.id)
+                let color: Color = selected ? .accentColor : .red
+                Annotation(place.name, coordinate: place.coordinate) {
+                    Button {
+                        selection = .live(place.id)
+                    } label: {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white, color)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(place.name)
+                    .accessibilityIdentifier("pin-\(place.id)")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+                .annotationTitles(.hidden)
+            }
+        }
+        .mapStyle(.standard(pointsOfInterest: .excludingAll))
     }
 
     @ViewBuilder
     private var searchSections: some View {
         switch search.status {
-        case .idle, .searching:
-            EmptyView()
+        case .idle:
+            if locating {
+                ProgressView("Finding your location…")
+            } else {
+                Text("Search places or turn on location to see what’s nearby.")
+                    .foregroundStyle(.secondary)
+            }
+        case .searching:
+            ProgressView("Finding places…")
         case .results:
             Section("Results") {
                 ForEach(search.results) { place in
@@ -238,14 +393,6 @@ private struct FeedView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        #if DEBUG
-        if showSearchCountInstrument {
-            Section {
-                Text("Searches: \(search.searchCount)")
-                    .accessibilityIdentifier("search-count")
-            }
-        }
-        #endif
     }
 
     private var showSearchCountInstrument: Bool {
@@ -273,7 +420,7 @@ private struct FeedView: View {
     }
 
     private func liveRow(_ place: LivePlace) -> some View {
-        let selected = selectedLive?.id == place.id
+        let selected = selection == .live(place.id)
         return Button {
             selection = .live(place.id)
         } label: {
@@ -324,13 +471,45 @@ private struct FeedView: View {
                 Section {
                     contextTitle(live.name)
                     LabeledContent("Address", value: live.address)
-                } footer: {
-                    Text("Live results don’t include leave-by estimates.")
                 }
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Timing")
+        .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
+    }
+
+    private func locate(initial: Bool) async {
+        guard !locating, !initial || !didLocate else { return }
+        let searchCount = search.searchCount
+        locating = true
+        defer { locating = false }
+        center = await currentLocation()
+        guard !Task.isCancelled else { return }
+        didLocate = true
+        guard let center, search.searchCount == searchCount, !initial || searchCount == 0 else { return }
+        if !initial { search.query = "" }
+        await search.load(.nearby(center))
+    }
+
+    private func currentLocation() async -> CLLocationCoordinate2D? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-SALIOStubLocation") {
+            return StubPlaceSearcher.fixedPlaces[0].coordinate
+        }
+        if arguments.contains(where: { $0.hasPrefix("-SALIOStubSearch") }) { return nil }
+        #endif
+        do {
+            for try await update in CLLocationUpdate.liveUpdates() {
+                if let location = update.location { return location.coordinate }
+                if update.authorizationDenied || update.authorizationDeniedGlobally || update.authorizationRestricted {
+                    break
+                }
+            }
+        } catch {
+            return nil
+        }
+        return nil
     }
 
     private func contextTitle(_ name: String) -> some View {

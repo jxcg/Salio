@@ -2,9 +2,40 @@ import XCTest
 
 @MainActor
 final class SalioUITests: XCTestCase {
+    func testNearbySharesPlacesAndSelectionWithMapWithoutFetchingAgain() {
+        let app = launch(arguments: ["-SALIOStubSearch", "-SALIOStubLocation", "-SALIOShowSearchCount"])
+        let cafe = app.buttons["stub-cafe"]
+        XCTAssertTrue(cafe.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["stub-cinema"].exists)
+        XCTAssertFalse(app.staticTexts["Nearby"].exists)
+        XCTAssertEqual(searchCount(in: app), 1)
+
+        app.buttons["show-map"].tap()
+        let cinemaPin = app.buttons["pin-stub-cinema"]
+        XCTAssertTrue(cinemaPin.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["pin-stub-cafe"].exists)
+        XCTAssertFalse(app.staticTexts["Nearby"].exists)
+        cinemaPin.tap()
+        app.buttons["show-list"].tap()
+        XCTAssertTrue(app.buttons["stub-cinema"].isSelected)
+        XCTAssertEqual(searchCount(in: app), 1)
+
+        app.buttons["refresh-nearby"].tap()
+        XCTAssertTrue(app.staticTexts["Searches: 2"].waitForExistence(timeout: 10))
+    }
+
+    func testLocationOffStillAllowsSearch() {
+        let app = launch(arguments: ["-SALIOStubSearch", "-SALIOShowSearchCount"])
+        XCTAssertTrue(app.staticTexts["Search places or turn on location to see what’s nearby."].waitForExistence(timeout: 10))
+        XCTAssertEqual(searchCount(in: app), 0)
+        searchField(in: app).tap()
+        searchField(in: app).typeText("coffee\n")
+        XCTAssertTrue(app.buttons["stub-cafe"].waitForExistence(timeout: 10))
+        XCTAssertEqual(searchCount(in: app), 1)
+    }
+
     func testSamplePlacesAppearWithoutServerConfiguration() {
-        let app = XCUIApplication()
-        app.launch()
+        let app = launch(arguments: ["-SALIOStubSearch"])
 
         XCTAssertTrue(app.staticTexts["The Picture House"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["North Street Gallery"].exists)
@@ -17,7 +48,7 @@ final class SalioUITests: XCTestCase {
         defer { hinge.angle = 0 }
         hinge.angle = 0
 
-        let app = launch(arguments: [])
+        let app = launch(arguments: ["-SALIOStubSearch"])
         let gallery = app.buttons.containing(.staticText, identifier: "North Street Gallery").firstMatch
         XCTAssertTrue(gallery.waitForExistence(timeout: 5))
         gallery.tap()
@@ -26,7 +57,7 @@ final class SalioUITests: XCTestCase {
         hinge.angle = .pi / 2
         hinge.angle = .pi
         XCTAssertTrue(app.navigationBars["Timing"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.navigationBars["Nearby"].exists)
+        XCTAssertTrue(searchField(in: app).exists)
         XCTAssertTrue(gallery.isSelected)
 
         hinge.angle = 0
@@ -34,6 +65,69 @@ final class SalioUITests: XCTestCase {
         XCTAssertTrue(gallery.isSelected)
     }
     #endif
+
+    func testProfileSavesAndResetsAcrossAppRelaunches() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = UUID().uuidString
+        app.launch()
+
+        let profile = app.buttons["Profile"]
+        guard profile.waitForExistence(timeout: 5) else {
+            XCTFail("Profile is not available from Nearby")
+            return
+        }
+        profile.tap()
+        let film = app.switches["Film"]
+        let walking = app.switches["Walking"]
+        let transit = app.switches["Public transport"]
+        XCTAssertTrue(film.waitForExistence(timeout: 5))
+        XCTAssertEqual(film.value as? String, "0")
+        tapToggle(film)
+        app.navigationBars["Profile"].swipeDown()
+        XCTAssertEqual(film.value as? String, "1")
+        app.buttons["Cancel"].tap()
+        app.alerts.buttons["Keep editing"].tap()
+        XCTAssertEqual(film.value as? String, "1")
+        let budget = app.buttons["profile-budget"]
+        budget.tap()
+        app.buttons["££"].tap()
+        app.swipeUp()
+        tapToggle(walking)
+        tapToggle(transit)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.textFields["search-field"].waitForExistence(timeout: 5))
+
+        app.terminate()
+        app.launch()
+        profile.tap()
+        XCTAssertEqual(film.value as? String, "1")
+        XCTAssertEqual(budget.value as? String, "££")
+        app.swipeUp()
+        XCTAssertEqual(walking.value as? String, "1")
+        XCTAssertEqual(transit.value as? String, "1")
+        app.buttons["Reset preferences"].tap()
+        app.alerts.buttons["Cancel"].tap()
+        XCTAssertEqual(walking.value as? String, "1")
+        app.buttons["Reset preferences"].tap()
+        app.alerts.buttons["Reset"].tap()
+
+        app.terminate()
+        app.launch()
+        profile.tap()
+        XCTAssertEqual(film.value as? String, "0")
+        XCTAssertEqual(budget.value as? String, "Not set")
+        app.swipeUp()
+        XCTAssertEqual(walking.value as? String, "0")
+        XCTAssertEqual(transit.value as? String, "0")
+        XCTAssertFalse(app.buttons["Reset preferences"].exists)
+    }
+
+    private func tapToggle(_ toggle: XCUIElement) {
+        // The accessibility element spans the row; the switch control is at its trailing edge.
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+    }
 
     func testSubmittingNonEmptyQueryRunsOneSearchAndSelectionSurvivesLifecycle() {
         let app = launch(arguments: ["-SALIOStubSearch", "-SALIOShowSearchCount"])
