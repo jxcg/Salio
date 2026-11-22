@@ -29,3 +29,34 @@ targets:
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         SWIFT_VERSION: '6.0'
+  SalioTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: Tests
+    dependencies:
+      - target: Salio
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SALIO_BUNDLE_ID).tests
+        SWIFT_VERSION: '6.0'
+  SalioUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: UITests
+    dependencies:
+      - target: Salio
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SALIO_BUNDLE_ID).uitests
+        TEST_TARGET_NAME: Salio
+        SWIFT_VERSION: '6.0'
+schemes:
+  Salio:
+    build:
+      targets:
+        Salio: all
+    test:
+      config: Debug
+      targets:
+        - SalioTests
+        - SalioUITests
