@@ -23,13 +23,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          # Include both parents of GitHub's pull-request merge commit.
+          fetch-depth: 2
           persist-credentials: false
-      - name: Install tools
-        run: command -v xcodegen || brew install xcodegen
-      - name: Compare base and PR on one simulator
+      - name: Compare stubbed search on one simulator
         run: |
           set -euo pipefail
+          status=0
+          git diff --no-ext-diff --quiet "$BASE_SHA" HEAD -- ios/App/ ios/project.yml || status=$?
+          case "$status" in
+            0) echo 'iOS performance: app inputs unchanged; comparison skipped.' >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
+            1) ;;
+            *) exit "$status" ;;
+          esac
+
+          command -v xcodegen >/dev/null || brew install xcodegen
           work=$(mktemp -d)
           mkdir "$work/base"
           git archive "$BASE_SHA" ios | tar -xf - -C "$work/base"

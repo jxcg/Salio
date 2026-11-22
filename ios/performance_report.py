@@ -28,7 +28,9 @@ def measured_median(metrics, family, suffix, unit):
 def main(base_path, pr_path):
     base, pr = metrics(base_path), metrics(pr_path)
     lines = [
-        "### Fixed search (median of five runs)",
+        "### Stubbed search (median of five runs)",
+        "",
+        "Measures submit through results rendering with XCTest polling; live MapKit is not exercised.",
         "",
         "| Metric | Base | PR | Change | Allowed increase | Status |",
         "| --- | ---: | ---: | ---: | ---: | --- |",
