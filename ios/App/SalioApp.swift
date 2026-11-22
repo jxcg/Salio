@@ -41,6 +41,13 @@ protocol PlaceSearching: Sendable {
 }
 
 struct MapKitPlaceSearcher: PlaceSearching {
+    private static let nearbyRadiusMeters: CLLocationDistance = 1_000
+    private static let nearbyCategories: [MKPointOfInterestCategory] = [
+        .cafe, .bakery, .restaurant, .brewery, .nightlife, .foodMarket,
+        .museum, .movieTheater, .theater, .musicVenue, .landmark,
+        .park, .beach, .zoo, .aquarium, .amusementPark,
+    ]
+
     func search(_ request: PlaceRequest) async throws -> [LivePlace] {
         #if DEBUG
         Logger(subsystem: Bundle.main.bundleIdentifier ?? "salio", category: "search").notice("MapKit search start")
@@ -48,18 +55,15 @@ struct MapKitPlaceSearcher: PlaceSearching {
         let search: MKLocalSearch
         switch request {
         case .nearby(let center):
-            let request = MKLocalPointsOfInterestRequest(center: center, radius: 1_000)
-            request.pointOfInterestFilter = MKPointOfInterestFilter(including: [
-                .cafe, .bakery, .restaurant, .brewery, .nightlife, .foodMarket,
-                .museum, .movieTheater, .theater, .musicVenue, .landmark,
-                .park, .beach, .zoo, .aquarium, .amusementPark,
-            ])
+            let request = MKLocalPointsOfInterestRequest(center: center, radius: Self.nearbyRadiusMeters)
+            request.pointOfInterestFilter = MKPointOfInterestFilter(including: Self.nearbyCategories)
             search = MKLocalSearch(request: request)
         case .text(let query, let center):
             let request = MKLocalSearch.Request()
             request.naturalLanguageQuery = query
             if let center {
-                request.region = MKCoordinateRegion(center: center, latitudinalMeters: 2_000, longitudinalMeters: 2_000)
+                let span = Self.nearbyRadiusMeters * 2
+                request.region = MKCoordinateRegion(center: center, latitudinalMeters: span, longitudinalMeters: span)
             }
             search = MKLocalSearch(request: request)
         }
@@ -264,32 +268,24 @@ private struct FeedView: View {
     }
 
     private var placesMap: some View {
-        Map(position: $camera, interactionModes: showMap ? .all : []) {
+        Map(position: $camera) {
             ForEach(search.results) { place in
-                let selected = selectedLive?.id == place.id
+                let selected = selection == .live(place.id)
                 let color: Color = selected ? .accentColor : .red
                 Annotation(place.name, coordinate: place.coordinate) {
-                    if showMap {
-                        Button {
-                            selection = .live(place.id)
-                        } label: {
-                            Image(systemName: "mappin.circle.fill")
-                                .font(.title2)
-                                .foregroundStyle(.white, color)
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(place.name)
-                        .accessibilityIdentifier("pin-\(place.id)")
-                        .accessibilityAddTraits(selected ? .isSelected : [])
-                    } else {
-                        Circle()
-                            .fill(color)
-                            .strokeBorder(.white, lineWidth: 1)
-                            .frame(width: selected ? 10 : 6, height: selected ? 10 : 6)
-                            .accessibilityHidden(true)
+                    Button {
+                        selection = .live(place.id)
+                    } label: {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white, color)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(place.name)
+                    .accessibilityIdentifier("pin-\(place.id)")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
                 }
                 .annotationTitles(.hidden)
             }
@@ -311,9 +307,6 @@ private struct FeedView: View {
             ProgressView("Finding places…")
         case .results:
             Section("Results") {
-                placesMap
-                    .frame(height: 168)
-                    .listRowInsets(EdgeInsets())
                 ForEach(search.results) { place in
                     liveRow(place)
                 }
@@ -356,7 +349,7 @@ private struct FeedView: View {
     }
 
     private func liveRow(_ place: LivePlace) -> some View {
-        let selected = selectedLive?.id == place.id
+        let selected = selection == .live(place.id)
         return Button {
             selection = .live(place.id)
         } label: {
