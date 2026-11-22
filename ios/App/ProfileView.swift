@@ -1,3 +1,4 @@
+import MapKit
 import SwiftData
 import SwiftUI
 
@@ -8,6 +9,17 @@ final class Preferences {
     var transport: [String] = []
 
     init() {}
+
+    static let categoriesByInterest: [String: [MKPointOfInterestCategory]] = [
+        "Art": [.museum, .theater],
+        "Film": [.movieTheater],
+        "Food": [.cafe, .bakery, .restaurant, .foodMarket],
+        "Outdoors": [.park, .beach, .zoo],
+    ]
+
+    var nearbyCategories: Set<MKPointOfInterestCategory> {
+        Set(interests.flatMap { Self.categoriesByInterest[$0, default: []] })
+    }
 }
 
 struct ProfileView: View {
@@ -31,11 +43,11 @@ struct ProfileView: View {
         NavigationStack {
             Form {
                 Section {
-                    choices(["Art", "Film", "Food", "Outdoors"], selection: $interests)
+                    choices(Preferences.categoriesByInterest.keys.sorted(), selection: $interests)
                 } header: {
                     Text("Interests")
                 } footer: {
-                    Text("Saved on this device.")
+                    Text("Saved on this device. Matching places appear first the next time Nearby refreshes.")
                 }
 
                 Picker("Budget", selection: $budget) {
