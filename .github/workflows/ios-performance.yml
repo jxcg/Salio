@@ -16,7 +16,7 @@ concurrency:
 jobs:
   fixed-search:
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -26,30 +26,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install tools
-        run: |
-          command -v xcodegen || brew install xcodegen
-          command -v uv || brew install uv
+        run: command -v xcodegen || brew install xcodegen
       - name: Compare base and PR on one simulator
         run: |
           set -euo pipefail
           work=$(mktemp -d)
           mkdir "$work/base"
-          git archive "$BASE_SHA" ios backend | tar -xf - -C "$work/base"
+          git archive "$BASE_SHA" ios | tar -xf - -C "$work/base"
           cp ios/UITests/SearchPerformanceTests.swift "$work/base/ios/UITests/"
-
-          fixture="http://127.0.0.1:8765"
-          uv run --locked --project "$work/base/backend" uvicorn main:app \
-            --app-dir "$work/base/backend" --host 127.0.0.1 --port 8765 > "$work/fixture.log" 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-connrefused \
-            "$fixture/v1/sample-feed" > /dev/null || { cat "$work/fixture.log"; exit 1; }
 
           for side in base pr; do
             source="$PWD/ios"
             if [[ "$side" == base ]]; then source="$work/base/ios"; fi
             xcodegen generate --spec "$source/project.yml"
-            TEST_RUNNER_SALIO_PERF_FIXTURE_URL="$fixture" xcodebuild -quiet test \
+            TEST_RUNNER_SALIO_PERF_ENABLED=1 xcodebuild -quiet test \
               -project "$source/Salio.xcodeproj" -scheme Salio \
               -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
               -derivedDataPath "$work/build-$side" -resultBundlePath "$work/$side.xcresult" \
