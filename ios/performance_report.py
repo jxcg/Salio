@@ -39,10 +39,8 @@ def main(base_path, pr_path):
         ("CPU", "time", "CPU time", "s", "ms", 1_000, 20),
         ("Memory", "physical_peak", "Peak physical memory", "kB", "MB", 0.001, 4),
     ):
-        base_median, pr_median = (
-            measured_median(metrics, family, suffix, raw_unit) * display_multiplier
-            for metrics in (base_metrics, pr_metrics)
-        )
+        base_median = measured_median(base_metrics, family, suffix, raw_unit) * display_multiplier
+        pr_median = measured_median(pr_metrics, family, suffix, raw_unit) * display_multiplier
         change = pr_median - base_median
         allowed_increase = max(base_median * 0.25, minimum_allowance)
         exceeds_allowance = change > allowed_increase
