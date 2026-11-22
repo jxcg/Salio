@@ -1,11 +1,25 @@
 import MapKit
 import os
+import SwiftData
 import SwiftUI
 
 @main
 struct SalioApp: App {
+    private let profileContainer = Result {
+        try ModelContainer(for: Preferences.self, configurations: Self.profileStore)
+    }
+
     var body: some Scene {
-        WindowGroup { FeedView() }
+        WindowGroup { FeedView(profileContainer: profileContainer) }
+    }
+
+    private static var profileStore: ModelConfiguration {
+        #if DEBUG
+        if let name = ProcessInfo.processInfo.environment["SALIO_PROFILE_TEST_STORE"] {
+            return ModelConfiguration(name, cloudKitDatabase: .none)
+        }
+        #endif
+        return ModelConfiguration(cloudKitDatabase: .none)
     }
 }
 
@@ -133,10 +147,12 @@ private enum Selection: Hashable {
 }
 
 private struct FeedView: View {
+    let profileContainer: Result<ModelContainer, any Error>
     private let entries = FeedEntry.samples
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
+    @State private var showingProfile = false
 
     private var selectedSample: FeedEntry? {
         if let selection, case .sample(let id) = selection, let entry = entries.first(where: { $0.id == id }) {
@@ -170,8 +186,19 @@ private struct FeedView: View {
             }
             .navigationTitle("Nearby")
             .navigationBarBackButtonHidden()
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Profile", systemImage: "person.crop.circle") { showingProfile = true }
+                }
+            }
         }
         .navigationSplitViewStyle(.balanced)
+        .sheet(isPresented: $showingProfile) {
+            switch profileContainer {
+            case .success(let container): ProfileView().modelContainer(container)
+            case .failure: ContentUnavailableView("Profile unavailable", systemImage: "person.crop.circle")
+            }
+        }
     }
 
     @ViewBuilder
