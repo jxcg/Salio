@@ -11,6 +11,8 @@ targets:
       path: Generated/Info.plist
       properties:
         CFBundleDisplayName: Salio
+        NSLocationWhenInUseUsageDescription: Salio uses your location to find places nearby.
+        NSLocationDefaultAccuracyReduced: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -21,8 +23,6 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(SALIO_BUNDLE_ID)
