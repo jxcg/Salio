@@ -19,7 +19,6 @@ jobs:
     timeout-minutes: 30
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -29,8 +28,10 @@ jobs:
       - name: Compare stubbed search on one simulator
         run: |
           set -euo pipefail
+          # The PR merge ref can be regenerated against a newer base than the event payload.
+          base_sha=$(git rev-parse --verify HEAD^1)
           status=0
-          git diff --no-ext-diff --quiet "$BASE_SHA" HEAD -- ios/App/ ios/project.yml || status=$?
+          git diff --no-ext-diff --quiet "$base_sha" HEAD -- ios/App/ ios/project.yml || status=$?
           case "$status" in
             0) echo 'iOS performance: app inputs unchanged; comparison skipped.' >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
             1) ;;
@@ -40,7 +41,7 @@ jobs:
           command -v xcodegen >/dev/null || brew install xcodegen
           work=$(mktemp -d)
           mkdir "$work/base"
-          git archive "$BASE_SHA" ios | tar -xf - -C "$work/base"
+          git archive "$base_sha" ios | tar -xf - -C "$work/base"
           cp ios/UITests/SearchPerformanceTests.swift "$work/base/ios/UITests/"
 
           for side in base pr; do
