@@ -1,6 +1,15 @@
 import XCTest
 
+@MainActor
 final class SalioUITests: XCTestCase {
+    func testSamplePlacesAppearWithoutServerConfiguration() {
+        let app = XCUIApplication()
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["The Picture House"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["North Street Gallery"].exists)
+    }
+
     func testSubmittingNonEmptyQueryRunsOneSearchAndSelectionSurvivesLifecycle() {
         let app = launch(arguments: ["-SALIOStubSearch", "-SALIOShowSearchCount"])
         XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 15))
@@ -58,7 +67,6 @@ final class SalioUITests: XCTestCase {
     private func launch(arguments: [String]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += arguments
-        app.launchEnvironment["SALIO_API_URL"] = "http://127.0.0.1:8765"
         app.launch()
         return app
     }
