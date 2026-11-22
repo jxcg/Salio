@@ -9,8 +9,6 @@ struct SalioApp: App {
     }
 }
 
-// MARK: - Sample feed
-
 struct FeedEntry: Decodable, Identifiable {
     let id: String
     let name: String
@@ -19,8 +17,6 @@ struct FeedEntry: Decodable, Identifiable {
     let closesAt: Date
     let leaveBy: Date
 }
-
-// MARK: - Live place search
 
 struct LivePlace: Identifiable, Equatable {
     let id: String
@@ -32,7 +28,6 @@ protocol PlaceSearching: Sendable {
     func search(_ query: String) async throws -> [LivePlace]
 }
 
-/// Runs the actual MapKit search. Never touches the Salio backend.
 struct MapKitPlaceSearcher: PlaceSearching {
     func search(_ query: String) async throws -> [LivePlace] {
         #if DEBUG
@@ -53,7 +48,6 @@ struct MapKitPlaceSearcher: PlaceSearching {
     }
 }
 
-/// Fixed-result searcher used by tests through launch arguments.
 struct StubPlaceSearcher: PlaceSearching {
     static let fixedPlaces = [
         LivePlace(id: "stub-cafe", name: "Stub Café", address: "1 Stub Street"),
@@ -91,7 +85,6 @@ final class SearchModel {
         self.searcher = searcher
     }
 
-    /// Runs exactly one search per non-empty submission; lifecycle changes never call this.
     func submit() async {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, status != .searching else { return }
@@ -119,8 +112,6 @@ final class SearchModel {
         return MapKitPlaceSearcher()
     }
 }
-
-// MARK: - Nearby screen
 
 private enum Selection: Hashable {
     case sample(FeedEntry.ID)
