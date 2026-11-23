@@ -1,12 +1,26 @@
 import CoreLocation
 import MapKit
 import os
+import SwiftData
 import SwiftUI
 
 @main
 struct SalioApp: App {
+    private let profileContainer = Result {
+        try ModelContainer(for: Preferences.self, configurations: Self.profileStore)
+    }
+
     var body: some Scene {
-        WindowGroup { FeedView() }
+        WindowGroup { FeedView(profileContainer: profileContainer) }
+    }
+
+    private static var profileStore: ModelConfiguration {
+        #if DEBUG
+        if let name = ProcessInfo.processInfo.environment["SALIO_PROFILE_TEST_STORE"] {
+            return ModelConfiguration(name, cloudKitDatabase: .none)
+        }
+        #endif
+        return ModelConfiguration(cloudKitDatabase: .none)
     }
 }
 
@@ -37,6 +51,7 @@ struct LivePlace: Identifiable, Equatable {
     let id: String
     let name: String
     let address: String
+    let category: MKPointOfInterestCategory?
     let latitude: Double
     let longitude: Double
 
@@ -100,6 +115,7 @@ struct MapKitPlaceSearcher: PlaceSearching {
                 id: id,
                 name: name,
                 address: address,
+                category: item.pointOfInterestCategory,
                 latitude: coordinate.latitude,
                 longitude: coordinate.longitude
             )
@@ -109,8 +125,10 @@ struct MapKitPlaceSearcher: PlaceSearching {
 
 struct StubPlaceSearcher: PlaceSearching {
     static let fixedPlaces = [
-        LivePlace(id: "stub-cafe", name: "Stub Café", address: "1 Stub Street", latitude: 51.5128, longitude: -0.1300),
-        LivePlace(id: "stub-cinema", name: "Stub Cinema", address: "2 Stub Street", latitude: 51.5160, longitude: -0.1238),
+        LivePlace(id: "stub-cafe", name: "Stub Café", address: "1 Stub Street", category: .cafe,
+                  latitude: 51.5128, longitude: -0.1300),
+        LivePlace(id: "stub-cinema", name: "Stub Cinema", address: "2 Stub Street", category: .movieTheater,
+                  latitude: 51.5160, longitude: -0.1238),
     ]
 
     var results: [LivePlace]
@@ -150,12 +168,30 @@ final class SearchModel {
         await load(.text(text, near: center))
     }
 
-    func load(_ request: PlaceRequest) async {
+    func loadNearby(near center: CLLocationCoordinate2D, matching categories: Set<MKPointOfInterestCategory>) async {
+        await load(.nearby(center), prioritizing: categories)
+    }
+
+    private func load(_ request: PlaceRequest, prioritizing categories: Set<MKPointOfInterestCategory> = []) async {
         guard status != .searching else { return }
         searchCount += 1
         status = .searching
         do {
-            results = try await searcher.search(request)
+            let places = try await searcher.search(request)
+            if categories.isEmpty {
+                results = places
+            } else {
+                var matches: [LivePlace] = []
+                var others: [LivePlace] = []
+                for place in places {
+                    if let category = place.category, categories.contains(category) {
+                        matches.append(place)
+                    } else {
+                        others.append(place)
+                    }
+                }
+                results = matches + others
+            }
             status = results.isEmpty ? .empty : .results
         } catch {
             results = []
@@ -184,10 +220,18 @@ private enum Selection: Hashable {
 }
 
 private struct FeedView: View {
+    let profileContainer: Result<ModelContainer, any Error>
     private let entries = FeedEntry.samples
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
+    @State private var wasClosed = false
+    @State private var hingeOpen = false
+    @State private var showContextCue = false
+    @State private var showingProfile = false
     @State private var center: CLLocationCoordinate2D?
     @State private var locating = false
     @State private var didLocate = false
@@ -206,7 +250,43 @@ private struct FeedView: View {
         return search.results.first { $0.id == id }
     }
 
-    var body: some View {
+    private var allowsContextCue: Bool {
+        !reduceMotion && !voiceOver && contrast != .increased
+    }
+
+    @ViewBuilder var body: some View {
+        // Build without hinge support on toolchains that predate the Duo SDK.
+        #if compiler(>=6.4.2)
+        if #available(iOS 27.1, *) {
+            splitView.onHingeChange { old, new in
+                let status = new.hinge?.status
+                guard old.hinge?.status != status else { return }
+                hingeOpen = status == .fullyOpen
+                showContextCue = hingeOpen && wasClosed && allowsContextCue
+                if status == .closed {
+                    wasClosed = true
+                } else if status == .fullyOpen || status == nil {
+                    wasClosed = false
+                }
+            }
+            .task(id: showContextCue) {
+                guard showContextCue else { return }
+                do {
+                    try await Task.sleep(for: .milliseconds(25))
+                    withAnimation(.easeOut(duration: 0.125)) { showContextCue = false }
+                } catch {
+                    // Closing cancels the cue; there is nothing to finish.
+                }
+            }
+        } else {
+            splitView
+        }
+        #else
+        splitView
+        #endif
+    }
+
+    private var splitView: some View {
         NavigationSplitView(preferredCompactColumn: $compactColumn) {
             placeContext
         } detail: {
@@ -241,10 +321,17 @@ private struct FeedView: View {
                         }
                         .accessibilityIdentifier(showMap ? "show-list" : "show-map")
                     }
+                    Button("Profile", systemImage: "person.crop.circle") { showingProfile = true }
                 }
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .sheet(isPresented: $showingProfile) {
+            switch profileContainer {
+            case .success(let container): ProfileView().modelContainer(container)
+            case .failure: ContentUnavailableView("Profile unavailable", systemImage: "person.crop.circle")
+            }
+        }
         .task { await locate(initial: true) }
         .onChange(of: search.results) {
             camera = .automatic
@@ -396,7 +483,7 @@ private struct FeedView: View {
         List {
             if let sample = selectedSample {
                 Section {
-                    Text(sample.name).font(.headline)
+                    contextTitle(sample.name)
                     LabeledContent("Walk", value: "\(sample.walkMinutes) min")
                     LabeledContent("Closes", value: sample.closesAt.formatted(date: .omitted, time: .shortened))
                 } footer: {
@@ -404,7 +491,7 @@ private struct FeedView: View {
                 }
             } else if let live = selectedLive {
                 Section {
-                    Text(live.name).font(.headline)
+                    contextTitle(live.name)
                     LabeledContent("Address", value: live.address)
                 }
             }
@@ -423,7 +510,8 @@ private struct FeedView: View {
         didLocate = true
         guard let center, search.searchCount == searchCount, !initial || searchCount == 0 else { return }
         if !initial { search.query = "" }
-        await search.load(.nearby(center))
+        let preferences = try? profileContainer.get().mainContext.fetch(FetchDescriptor<Preferences>()).first
+        await search.loadNearby(near: center, matching: preferences?.nearbyCategories ?? [])
     }
 
     private func currentLocation() async -> CLLocationCoordinate2D? {
@@ -445,5 +533,24 @@ private struct FeedView: View {
             return nil
         }
         return nil
+    }
+
+    private func contextTitle(_ name: String) -> some View {
+        Text(name).font(.headline)
+            .overlay(alignment: .leading) {
+                ZStack {
+                    if showContextCue {
+                        Rectangle()
+                            .fill(Color.accentColor.opacity(0.12))
+                            .frame(width: 2, height: 18)
+                            .colorEffect(ShaderLibrary.contextAccent(.boundingRect))
+                            .offset(x: -6)
+                            .transition(.asymmetric(insertion: .identity, removal: .opacity))
+                    }
+                }
+                .opacity(hingeOpen && allowsContextCue ? 1 : 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
     }
 }

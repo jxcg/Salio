@@ -41,6 +41,103 @@ final class SalioUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["North Street Gallery"].exists)
     }
 
+    #if compiler(>=6.4.4) && targetEnvironment(simulator)
+    func testDuoKeepsNearbyAndSelectionAcrossHingeChanges() throws {
+        guard #available(iOS 27.3, *) else { throw XCTSkip("Hinge automation requires iOS 27.3") }
+        guard let hinge = XCUIDevice.shared.hinge else { throw XCTSkip("Requires the Duo simulator") }
+        defer { hinge.angle = 0 }
+        hinge.angle = 0
+
+        let app = launch(arguments: ["-SALIOStubSearch"])
+        let gallery = app.buttons.containing(.staticText, identifier: "North Street Gallery").firstMatch
+        XCTAssertTrue(gallery.waitForExistence(timeout: 5))
+        gallery.tap()
+        XCTAssertTrue(gallery.isSelected)
+
+        hinge.angle = .pi / 2
+        hinge.angle = .pi
+        XCTAssertTrue(app.navigationBars["Timing"].waitForExistence(timeout: 5))
+        XCTAssertTrue(searchField(in: app).exists)
+        XCTAssertTrue(gallery.isSelected)
+
+        hinge.angle = 0
+        XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(gallery.isSelected)
+    }
+    #endif
+
+    func testProfileSavesAndResetsAcrossAppRelaunches() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments += ["-SALIOStubSearch", "-SALIOStubLocation"]
+        app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = UUID().uuidString
+        app.launch()
+
+        let profile = app.buttons["Profile"]
+        guard profile.waitForExistence(timeout: 5) else {
+            XCTFail("Profile is not available from Nearby")
+            return
+        }
+        profile.tap()
+        let film = app.switches["Film"]
+        let walking = app.switches["Walking"]
+        let transit = app.switches["Public transport"]
+        XCTAssertTrue(film.waitForExistence(timeout: 5))
+        XCTAssertEqual(film.value as? String, "0")
+        tapToggle(film)
+        app.navigationBars["Profile"].swipeDown()
+        XCTAssertEqual(film.value as? String, "1")
+        app.buttons["Cancel"].tap()
+        app.alerts.buttons["Keep editing"].tap()
+        XCTAssertEqual(film.value as? String, "1")
+        let budget = app.buttons["profile-budget"]
+        budget.tap()
+        app.buttons["££"].tap()
+        app.swipeUp()
+        tapToggle(walking)
+        tapToggle(transit)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.textFields["search-field"].waitForExistence(timeout: 5))
+
+        app.terminate()
+        app.launch()
+        let cinema = app.buttons["stub-cinema"]
+        let cafe = app.buttons["stub-cafe"]
+        XCTAssertTrue(cinema.waitForExistence(timeout: 10))
+        XCTAssertTrue(cafe.exists)
+        XCTAssertLessThan(cinema.frame.midY, cafe.frame.midY)
+        profile.tap()
+        XCTAssertEqual(film.value as? String, "1")
+        XCTAssertEqual(budget.value as? String, "££")
+        app.swipeUp()
+        XCTAssertEqual(walking.value as? String, "1")
+        XCTAssertEqual(transit.value as? String, "1")
+        app.buttons["Reset preferences"].tap()
+        app.alerts.buttons["Cancel"].tap()
+        XCTAssertEqual(walking.value as? String, "1")
+        app.buttons["Reset preferences"].tap()
+        app.alerts.buttons["Reset"].tap()
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(cafe.waitForExistence(timeout: 10))
+        XCTAssertTrue(cinema.exists)
+        XCTAssertLessThan(cafe.frame.midY, cinema.frame.midY)
+        profile.tap()
+        XCTAssertEqual(film.value as? String, "0")
+        XCTAssertEqual(budget.value as? String, "Not set")
+        app.swipeUp()
+        XCTAssertEqual(walking.value as? String, "0")
+        XCTAssertEqual(transit.value as? String, "0")
+        XCTAssertFalse(app.buttons["Reset preferences"].exists)
+    }
+
+    private func tapToggle(_ toggle: XCUIElement) {
+        // The accessibility element spans the row; the switch control is at its trailing edge.
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+    }
+
     func testSubmittingNonEmptyQueryRunsOneSearchAndSelectionSurvivesLifecycle() {
         let app = launch(arguments: ["-SALIOStubSearch", "-SALIOShowSearchCount"])
         XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 15))
