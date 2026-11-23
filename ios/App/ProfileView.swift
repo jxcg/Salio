@@ -23,6 +23,9 @@ final class Preferences {
 }
 
 struct ProfileView: View {
+    let interestsOnly: Bool
+    let onSave: () -> Void
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
     @Query private var saved: [Preferences]
@@ -50,26 +53,28 @@ struct ProfileView: View {
                     Text("Saved on this device. Matching places appear first the next time Nearby refreshes.")
                 }
 
-                Picker("Budget", selection: $budget) {
-                    Text("Not set").tag(nil as String?)
-                    ForEach(["£", "££", "£££"], id: \.self) { level in
-                        Text(level).tag(Optional(level))
+                if !interestsOnly {
+                    Picker("Budget", selection: $budget) {
+                        Text("Not set").tag(nil as String?)
+                        ForEach(["£", "££", "£££"], id: \.self) { level in
+                            Text(level).tag(Optional(level))
+                        }
                     }
-                }
-                .accessibilityValue(budget ?? "Not set")
-                .accessibilityIdentifier("profile-budget")
+                    .accessibilityValue(budget ?? "Not set")
+                    .accessibilityIdentifier("profile-budget")
 
-                Section("Getting around") {
-                    choices(["Walking", "Public transport", "Driving"], selection: $transport)
-                }
+                    Section("Getting around") {
+                        choices(["Walking", "Public transport", "Driving"], selection: $transport)
+                    }
 
-                if !saved.isEmpty {
-                    Section {
-                        Button("Reset preferences", role: .destructive) { confirmingReset = true }
+                    if !saved.isEmpty {
+                        Section {
+                            Button("Reset preferences", role: .destructive) { confirmingReset = true }
+                        }
                     }
                 }
             }
-            .navigationTitle("Profile")
+            .navigationTitle(interestsOnly ? "Choose interests" : "Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -122,7 +127,10 @@ struct ProfileView: View {
         preferences.interests = interests.sorted()
         preferences.budget = budget
         preferences.transport = transport.sorted()
-        if commit() { dismiss() }
+        if commit() {
+            onSave()
+            dismiss()
+        }
     }
 
     private func reset() {
