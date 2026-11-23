@@ -154,9 +154,11 @@ final class SearchModel {
     var query = ""
     private(set) var status: Status = .idle
     private(set) var results: [LivePlace] = []
+    private(set) var isNearbyResults = false
     private(set) var searchCount = 0
 
     private let searcher: any PlaceSearching
+    private var rawNearbyResults: [LivePlace] = []
 
     init(searcher: any PlaceSearching) {
         self.searcher = searcher
@@ -165,38 +167,54 @@ final class SearchModel {
     func submit(near center: CLLocationCoordinate2D? = nil) async {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        await load(.text(text, near: center))
+        await load(.text(text, near: center), nearby: false, interests: [])
     }
 
-    func loadNearby(near center: CLLocationCoordinate2D, matching categories: Set<MKPointOfInterestCategory>) async {
-        await load(.nearby(center), prioritizing: categories)
+    func loadNearby(near center: CLLocationCoordinate2D, matching interests: [String]) async {
+        await load(.nearby(center), nearby: true, interests: interests)
     }
 
-    private func load(_ request: PlaceRequest, prioritizing categories: Set<MKPointOfInterestCategory> = []) async {
+    func reprioritize(for interests: [String]) {
+        guard isNearbyResults else { return }
+        results = Self.prioritized(rawNearbyResults, for: interests)
+    }
+
+    func matchReason(for place: LivePlace, interests: [String]) -> String? {
+        guard isNearbyResults,
+              let interest = Preferences.matchingInterest(for: place.category, in: interests) else { return nil }
+        return "Matches \(interest)"
+    }
+
+    private func load(_ request: PlaceRequest, nearby: Bool, interests: [String]) async {
         guard status != .searching else { return }
         searchCount += 1
         status = .searching
         do {
             let places = try await searcher.search(request)
-            if categories.isEmpty {
-                results = places
-            } else {
-                var matches: [LivePlace] = []
-                var others: [LivePlace] = []
-                for place in places {
-                    if let category = place.category, categories.contains(category) {
-                        matches.append(place)
-                    } else {
-                        others.append(place)
-                    }
-                }
-                results = matches + others
-            }
+            isNearbyResults = nearby
+            rawNearbyResults = nearby ? places : []
+            results = nearby ? Self.prioritized(places, for: interests) : places
             status = results.isEmpty ? .empty : .results
         } catch {
+            isNearbyResults = false
+            rawNearbyResults = []
             results = []
             status = .failed
         }
+    }
+
+    private static func prioritized(_ places: [LivePlace], for interests: [String]) -> [LivePlace] {
+        guard !interests.isEmpty else { return places }
+        var matches: [LivePlace] = []
+        var others: [LivePlace] = []
+        for place in places {
+            if Preferences.matchingInterest(for: place.category, in: interests) != nil {
+                matches.append(place)
+            } else {
+                others.append(place)
+            }
+        }
+        return matches + others
     }
 
     static func liveSearcher() -> any PlaceSearching {
@@ -238,6 +256,7 @@ private struct FeedView: View {
     @State private var showContextCue = false
     @State private var profileSheet: ProfileSheet?
     @AppStorage(Self.interestSetupKey) private var finishedInterestSetup = false
+    @State private var activeInterests: [String] = []
     @State private var center: CLLocationCoordinate2D?
     @State private var locating = false
     @State private var didLocate = false
@@ -310,7 +329,13 @@ private struct FeedView: View {
                     placesMap
                         .safeAreaInset(edge: .bottom) {
                             if let place = selectedLive {
-                                rowLabel(title: place.name, subtitle: place.address, leaveBy: nil, selected: false)
+                                rowLabel(
+                                    title: place.name,
+                                    subtitle: place.address,
+                                    reason: search.matchReason(for: place, interests: activeInterests),
+                                    leaveBy: nil,
+                                    selected: false
+                                )
                                     .padding(.horizontal)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .background(.regularMaterial)
@@ -344,8 +369,19 @@ private struct FeedView: View {
         .sheet(item: $profileSheet) { sheet in
             switch profileContainer {
             case .success(let container):
-                ProfileView(interestsOnly: sheet == .onboarding) { finishedInterestSetup = true }
-                    .modelContainer(container)
+                ProfileView(
+                    interestsOnly: sheet == .onboarding,
+                    onSave: { interests in
+                        finishedInterestSetup = true
+                        activeInterests = interests
+                        search.reprioritize(for: interests)
+                    },
+                    onReset: {
+                        activeInterests = []
+                        search.reprioritize(for: [])
+                    }
+                )
+                .modelContainer(container)
             case .failure: ContentUnavailableView("Profile unavailable", systemImage: "person.crop.circle")
             }
         }
@@ -474,18 +510,29 @@ private struct FeedView: View {
         return Button {
             selection = .live(place.id)
         } label: {
-            rowLabel(title: place.name, subtitle: place.address, leaveBy: nil, selected: selected)
+            rowLabel(
+                title: place.name,
+                subtitle: place.address,
+                reason: search.matchReason(for: place, interests: activeInterests),
+                leaveBy: nil,
+                selected: selected
+            )
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(place.id)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func rowLabel(title: String, subtitle: String, leaveBy: Date?, selected: Bool) -> some View {
+    private func rowLabel(title: String, subtitle: String, reason: String? = nil, leaveBy: Date?, selected: Bool) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title).font(.headline)
                 Text(subtitle).foregroundStyle(.secondary)
+                if let reason {
+                    Text(reason)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.tint)
+                }
                 if let leaveBy {
                     Label {
                         Text("Leave by \(leaveBy.formatted(date: .omitted, time: .shortened))")
@@ -521,6 +568,9 @@ private struct FeedView: View {
                 Section {
                     contextTitle(live.name)
                     LabeledContent("Address", value: live.address)
+                    if let reason = search.matchReason(for: live, interests: activeInterests) {
+                        LabeledContent("Why it’s here", value: reason)
+                    }
                 }
             }
         }
@@ -538,8 +588,9 @@ private struct FeedView: View {
         didLocate = true
         guard let center, search.searchCount == searchCount, !initial || searchCount == 0 else { return }
         if !initial { search.query = "" }
-        let preferences = try? profileContainer.get().mainContext.fetch(FetchDescriptor<Preferences>()).first
-        await search.loadNearby(near: center, matching: preferences?.nearbyCategories ?? [])
+        let interests = (try? profileContainer.get().mainContext.fetch(FetchDescriptor<Preferences>()).first?.interests) ?? []
+        activeInterests = interests
+        await search.loadNearby(near: center, matching: interests)
     }
 
     private func currentLocation() async -> CLLocationCoordinate2D? {
