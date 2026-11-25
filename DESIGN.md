@@ -66,6 +66,7 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
   - Samples Red (`0.72×`), Green (`1.0×`), and Blue (`1.30×`) along the lens offset so natural warm/cool edge dispersion emerges only from bending light—never painted on as static red/blue chrome.
 - **Scoped per-card ripple:** Each `FrostedGlassCard` manages its own tap origin and ripple state (`SpatialTapGesture`) so a tap ripples **only** the card you touched—never sibling cards.
 - **Map blur-to-reveal ASCII veil:** When the Duo map rail or full-screen map appears or pans to a newly selected place, `MapBlurRevealModifier` briefly (`0.60s`) resolves a `10pt → 0pt` blur alongside a shifting organic `+ · : /` ASCII scatter veil, then pauses completely with zero idle redraws (disabled under `Reduce Motion`, `VoiceOver`, and `Increase Contrast`).
+- **Subtle Duo paper-unfold play:** On a `closed → fullyOpen` hinge transition, the left rail map and frosted context card settle outward from the center crease with a staggered two-beat spring (`65ms` offset, subtle `-4.5° / -5.5°` hinge-edge perspective tilt, gentle scale settle, plus a single frosted ripple on the context card alone) while the right-hand feed stays anchored at its exact closed width. Disabled under `Reduce Motion`, `VoiceOver`, and `Increase Contrast`.
 - **Zero idle burn:** Outside the active `0.60–0.62s` transition window, `TimelineView` pauses and `.layerEffect(..., isEnabled: false)` bypasses the shader completely.
 
 ## 5. Restraint & Accessibility Rules

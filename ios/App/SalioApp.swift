@@ -277,6 +277,10 @@ private struct FeedView: View {
     @State private var railCamera: MapCameraPosition = .automatic
     @State private var featuredCardRipple = 0
     @State private var mapCardRipple = 0
+    @State private var railContextRipple = 0
+    @State private var unfoldCount = 0
+    @State private var railMapSettled = true
+    @State private var railCardSettled = true
     @State private var compactFeedWidth: CGFloat?
 
     private var palette: SalioPalette {
@@ -284,9 +288,11 @@ private struct FeedView: View {
     }
 
     private var railMapRevealKey: String {
-        if let live = selectedLive { return "live-\(live.id)" }
-        if let sample = selectedSample { return "sample-\(sample.id)" }
-        return "initial"
+        let base: String
+        if let live = selectedLive { base = "live-\(live.id)" }
+        else if let sample = selectedSample { base = "sample-\(sample.id)" }
+        else { base = "initial" }
+        return "\(base)-u\(unfoldCount)"
     }
 
     private static var interestSetupKey: String {
@@ -322,11 +328,37 @@ private struct FeedView: View {
                 let status = new.hinge?.status
                 guard old.hinge?.status != status else { return }
                 hingeOpen = status == .fullyOpen
-                showContextCue = hingeOpen && wasClosed && allowsContextCue
+                let didUnfold = hingeOpen && wasClosed && allowsContextCue
+                showContextCue = didUnfold
+                if didUnfold {
+                    unfoldCount += 1
+                    railMapSettled = false
+                    railCardSettled = false
+                }
                 if status == .closed {
                     wasClosed = true
                 } else if status == .fullyOpen || status == nil {
                     wasClosed = false
+                }
+            }
+            .task(id: unfoldCount) {
+                guard unfoldCount > 0, allowsContextCue else {
+                    railMapSettled = true
+                    railCardSettled = true
+                    return
+                }
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.80)) {
+                    railMapSettled = true
+                }
+                do {
+                    try await Task.sleep(for: .milliseconds(65))
+                    withAnimation(.spring(response: 0.46, dampingFraction: 0.78)) {
+                        railCardSettled = true
+                    }
+                    railContextRipple += 1
+                } catch {
+                    railMapSettled = true
+                    railCardSettled = true
                 }
             }
             .task(id: showContextCue) {
@@ -799,11 +831,21 @@ private struct FeedView: View {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .strokeBorder(palette.border, lineWidth: 1)
                     )
+                    .offset(x: railMapSettled ? 0 : 14)
+                    .scaleEffect(railMapSettled ? 1 : 0.975, anchor: .trailing)
+                    .rotation3DEffect(
+                        .degrees(railMapSettled ? 0 : -4.5),
+                        axis: (x: 0, y: 1, z: 0),
+                        anchor: .trailing,
+                        perspective: 0.45
+                    )
+                    .opacity(railMapSettled ? 1 : 0.88)
 
                 if let sample = selectedSample {
                     FrostedGlassCard(
                         palette: palette,
                         seed: sample.id.unicodeScalars.reduce(29) { $0 &* 31 &+ Int($1.value) },
+                        rippleTrigger: railContextRipple,
                         tapToRipple: true
                     ) {
                         VStack(alignment: .leading, spacing: 10) {
@@ -834,10 +876,20 @@ private struct FeedView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .offset(x: railCardSettled ? 0 : 18)
+                    .scaleEffect(railCardSettled ? 1 : 0.968, anchor: .trailing)
+                    .rotation3DEffect(
+                        .degrees(railCardSettled ? 0 : -5.5),
+                        axis: (x: 0, y: 1, z: 0),
+                        anchor: .trailing,
+                        perspective: 0.45
+                    )
+                    .opacity(railCardSettled ? 1 : 0.82)
                 } else if let live = selectedLive {
                     FrostedGlassCard(
                         palette: palette,
                         seed: live.id.unicodeScalars.reduce(37) { $0 &* 31 &+ Int($1.value) },
+                        rippleTrigger: railContextRipple,
                         tapToRipple: true
                     ) {
                         VStack(alignment: .leading, spacing: 10) {
@@ -865,6 +917,15 @@ private struct FeedView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .offset(x: railCardSettled ? 0 : 18)
+                    .scaleEffect(railCardSettled ? 1 : 0.968, anchor: .trailing)
+                    .rotation3DEffect(
+                        .degrees(railCardSettled ? 0 : -5.5),
+                        axis: (x: 0, y: 1, z: 0),
+                        anchor: .trailing,
+                        perspective: 0.45
+                    )
+                    .opacity(railCardSettled ? 1 : 0.82)
                 }
             }
             .padding(.horizontal, 12)
