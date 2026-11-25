@@ -1,17 +1,18 @@
 name: iOS performance
 
 on:
-  pull_request:
-    paths:
-      - 'ios/**'
-      - '.github/scripts/performance_report.py'
-      - '.github/workflows/ios-performance.yml'
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Base branch, tag, or commit to compare against
+        default: main
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: ios-performance-${{ github.event.pull_request.number }}
+  group: ios-performance-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,31 +24,37 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # Include both parents of GitHub's pull-request merge commit.
-          fetch-depth: 2
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.base_ref }}
+          path: .ci-base
+          fetch-depth: 1
           persist-credentials: false
       - name: Compare stubbed search on one simulator
         run: |
           set -euo pipefail
-          # The PR merge ref can be regenerated against a newer base than the event payload.
-          base_sha=$(git rev-parse --verify HEAD^1)
-          status=0
-          git diff --no-ext-diff --quiet "$base_sha" HEAD -- ios/App/ ios/project.yml || status=$?
-          case "$status" in
-            0) echo 'iOS performance: app inputs unchanged; comparison skipped.' >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
-            1) ;;
-            *) exit "$status" ;;
-          esac
+          test -d .ci-base/ios/App && test -f .ci-base/ios/project.yml
+          app_status=0
+          diff -rq .ci-base/ios/App ios/App >/dev/null || app_status=$?
+          project_status=0
+          cmp -s .ci-base/ios/project.yml ios/project.yml || project_status=$?
+          if [[ "$app_status" -gt 1 || "$project_status" -gt 1 ]]; then
+            exit 2
+          fi
+          if [[ "$app_status" -eq 0 && "$project_status" -eq 0 ]]; then
+            echo 'iOS performance: app inputs unchanged; comparison skipped.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
           command -v xcodegen >/dev/null || brew install xcodegen
           work=$(mktemp -d)
-          mkdir "$work/base"
-          git archive "$base_sha" ios | tar -xf - -C "$work/base"
-          cp ios/UITests/SearchPerformanceTests.swift "$work/base/ios/UITests/"
+          cp ios/UITests/SearchPerformanceTests.swift .ci-base/ios/UITests/
 
           for side in base pr; do
             source="$PWD/ios"
-            if [[ "$side" == base ]]; then source="$work/base/ios"; fi
+            if [[ "$side" == base ]]; then source="$PWD/.ci-base/ios"; fi
             xcodegen generate --spec "$source/project.yml"
             TEST_RUNNER_SALIO_PERF_ENABLED=1 xcodebuild -quiet test \
               -project "$source/Salio.xcodeproj" -scheme Salio \
