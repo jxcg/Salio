@@ -17,14 +17,16 @@ final class Preferences {
         "Outdoors": [.park, .beach, .zoo],
     ]
 
-    var nearbyCategories: Set<MKPointOfInterestCategory> {
-        Set(interests.flatMap { Self.categoriesByInterest[$0, default: []] })
+    static func matchingInterest(for category: MKPointOfInterestCategory?, in interests: [String]) -> String? {
+        guard let category else { return nil }
+        return interests.sorted().first { categoriesByInterest[$0, default: []].contains(category) }
     }
 }
 
 struct ProfileView: View {
     let interestsOnly: Bool
-    let onSave: () -> Void
+    let onSave: ([String]) -> Void
+    let onReset: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
@@ -50,7 +52,7 @@ struct ProfileView: View {
                 } header: {
                     Text("Interests")
                 } footer: {
-                    Text("Saved on this device. Matching places appear first the next time Nearby refreshes.")
+                    Text("Saved on this device. Matching Nearby places appear first.")
                 }
 
                 if !interestsOnly {
@@ -128,7 +130,7 @@ struct ProfileView: View {
         preferences.budget = budget
         preferences.transport = transport.sorted()
         if commit() {
-            onSave()
+            onSave(preferences.interests)
             dismiss()
         }
     }
@@ -139,6 +141,7 @@ struct ProfileView: View {
             interests = []
             budget = nil
             transport = []
+            onReset()
         }
     }
 
