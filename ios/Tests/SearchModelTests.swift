@@ -1,3 +1,4 @@
+import CoreLocation
 import SwiftUI
 import XCTest
 
@@ -87,5 +88,14 @@ final class SearchModelTests: XCTestCase {
         XCTAssertNotEqual(SalioAppearance.mistGlass.palette(for: .light), SalioAppearance.stoneAmber.palette(for: .light))
         XCTAssertNotEqual(SalioAppearance.mistGlass.palette(for: .light), SalioAppearance.mistGlass.palette(for: .dark))
         XCTAssertNotEqual(SalioAppearance.stoneAmber.palette(for: .light), SalioAppearance.stoneAmber.palette(for: .dark))
+    }
+
+    func testSamplePlacesHaveValidCoordinatesForMapRail() {
+        XCTAssertFalse(FeedEntry.samples.isEmpty)
+        for sample in FeedEntry.samples {
+            XCTAssertTrue(CLLocationCoordinate2DIsValid(sample.coordinate))
+            XCTAssertNotEqual(sample.latitude, 0)
+            XCTAssertNotEqual(sample.longitude, 0)
+        }
     }
 }

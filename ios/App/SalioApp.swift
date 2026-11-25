@@ -31,17 +31,25 @@ struct FeedEntry: Identifiable {
     let walkMinutes: Int
     let closesAt: Date
     let leaveBy: Date
+    let latitude: Double
+    let longitude: Double
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
 
     static let samples: [FeedEntry] = {
         let demoStart = Date(timeIntervalSince1970: 1_893_520_800) // 2030-01-01 18:00 UTC
         return [
             FeedEntry(
                 id: "cinema", name: "The Picture House", category: "Cinema", walkMinutes: 8,
-                closesAt: demoStart.addingTimeInterval(79 * 60), leaveBy: demoStart.addingTimeInterval(11 * 60)
+                closesAt: demoStart.addingTimeInterval(79 * 60), leaveBy: demoStart.addingTimeInterval(11 * 60),
+                latitude: 51.5136, longitude: -0.1365
             ),
             FeedEntry(
                 id: "gallery", name: "North Street Gallery", category: "Art", walkMinutes: 14,
-                closesAt: demoStart.addingTimeInterval(154 * 60), leaveBy: demoStart.addingTimeInterval(80 * 60)
+                closesAt: demoStart.addingTimeInterval(154 * 60), leaveBy: demoStart.addingTimeInterval(80 * 60),
+                latitude: 51.5150, longitude: -0.1318
             ),
         ]
     }()
@@ -249,6 +257,7 @@ private struct FeedView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.openURL) private var openURL
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
@@ -264,6 +273,7 @@ private struct FeedView: View {
     @State private var didLocate = false
     @State private var showMap = false
     @State private var camera: MapCameraPosition = .automatic
+    @State private var railCamera: MapCameraPosition = .automatic
     @State private var rippleStart: Date?
     @State private var rippleOrigin = UnitPoint(x: 0.62, y: 0.42)
 
@@ -336,6 +346,7 @@ private struct FeedView: View {
     private var splitView: some View {
         NavigationSplitView(preferredCompactColumn: $compactColumn) {
             placeContext
+                .navigationSplitViewColumnWidth(min: 270, ideal: 310, max: 340)
         } detail: {
             Group {
                 if showMap, search.status == .results {
@@ -408,10 +419,17 @@ private struct FeedView: View {
             case .failure: ContentUnavailableView("Profile unavailable", systemImage: "person.crop.circle")
             }
         }
-        .task { await locate(initial: true) }
+        .task {
+            syncRailCamera()
+            await locate(initial: true)
+        }
         .onChange(of: search.results) {
             camera = .automatic
+            syncRailCamera()
             triggerRipple()
+        }
+        .onChange(of: selection) {
+            syncRailCamera()
         }
         .onChange(of: appearance) {
             triggerRipple()
@@ -525,6 +543,8 @@ private struct FeedView: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 20)
+            .frame(maxWidth: 460)
+            .frame(maxWidth: .infinity)
         }
         .background(palette.ground.ignoresSafeArea())
     }
@@ -772,31 +792,168 @@ private struct FeedView: View {
 
     @ViewBuilder
     private var placeContext: some View {
-        List {
-            if let sample = selectedSample {
-                Section {
-                    contextTitle(sample.name)
-                    LabeledContent("Walk", value: "\(sample.walkMinutes) min")
-                    LabeledContent("Closes", value: sample.closesAt.formatted(date: .omitted, time: .shortened))
-                } footer: {
-                    Text("Your leave-by time includes the walk and an hour at the venue before it closes.")
-                }
-                .listRowBackground(palette.card)
-            } else if let live = selectedLive {
-                Section {
-                    contextTitle(live.name)
-                    LabeledContent("Address", value: live.address)
-                    if let reason = search.matchReason(for: live, interests: activeInterests) {
-                        LabeledContent("Why it’s here", value: reason)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                railMap
+                    .frame(height: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(palette.border, lineWidth: 1)
+                    )
+
+                if let sample = selectedSample {
+                    FrostedGlassCard(
+                        palette: palette,
+                        rippleStart: rippleStart,
+                        rippleOrigin: rippleOrigin,
+                        seed: sample.id.unicodeScalars.reduce(29) { $0 &* 31 &+ Int($1.value) }
+                    ) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            contextTitle(sample.name)
+                            Text("\(sample.category) · \(sample.walkMinutes) min walk")
+                                .font(.subheadline)
+                                .foregroundStyle(palette.muted)
+
+                            VStack(spacing: 8) {
+                                contextMetricRow("Walk", value: "\(sample.walkMinutes) min")
+                                Divider().overlay(palette.border)
+                                contextMetricRow(
+                                    "Closes",
+                                    value: sample.closesAt.formatted(date: .omitted, time: .shortened)
+                                )
+                                Divider().overlay(palette.border)
+                                contextMetricRow(
+                                    "Leave by",
+                                    value: sample.leaveBy.formatted(date: .omitted, time: .shortened),
+                                    valueColor: palette.leaveBy
+                                )
+                            }
+                            .padding(.top, 2)
+
+                            Text("Your leave-by time includes the walk and an hour at the venue before it closes.")
+                                .font(.caption)
+                                .foregroundStyle(palette.muted)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else if let live = selectedLive {
+                    FrostedGlassCard(
+                        palette: palette,
+                        rippleStart: rippleStart,
+                        rippleOrigin: rippleOrigin,
+                        seed: live.id.unicodeScalars.reduce(37) { $0 &* 31 &+ Int($1.value) }
+                    ) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if let reason = search.matchReason(for: live, interests: activeInterests) {
+                                Text(reason)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(palette.signal)
+                            }
+                            contextTitle(live.name)
+                            if !live.address.isEmpty {
+                                Text(live.address)
+                                    .font(.subheadline)
+                                    .foregroundStyle(palette.muted)
+                            }
+                            Button("Open in Maps") {
+                                openInMaps(name: live.name, coordinate: live.coordinate)
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(palette.onCTA)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(palette.ink, in: Capsule())
+                            .buttonStyle(.plain)
+                            .padding(.top, 2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .listRowBackground(palette.card)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 20)
+        }
+        .background(palette.ground.ignoresSafeArea())
+        .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
+    }
+
+    private var railMap: some View {
+        Map(position: $railCamera) {
+            if let live = selectedLive {
+                ForEach(search.results) { place in
+                    let isSelected = place.id == live.id
+                    Annotation(place.name, coordinate: place.coordinate) {
+                        Button {
+                            selection = .live(place.id)
+                            triggerRipple()
+                        } label: {
+                            Image(systemName: "mappin.circle.fill")
+                                .font(isSelected ? .title2 : .body)
+                                .foregroundStyle(.white, isSelected ? palette.signal : palette.ink)
+                                .frame(width: 36, height: 36)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(place.name)
+                        .accessibilityIdentifier("rail-pin-\(place.id)")
+                    }
+                    .annotationTitles(.hidden)
+                }
+            } else if let sample = selectedSample {
+                Annotation(sample.name, coordinate: sample.coordinate) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.white, palette.signal)
+                        .accessibilityHidden(true)
+                }
+                .annotationTitles(.hidden)
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(palette.ground)
-        .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
+        .mapStyle(.standard(pointsOfInterest: .excludingAll))
+    }
+
+    private func contextMetricRow(_ label: String, value: String, valueColor: Color? = nil) -> some View {
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(palette.muted)
+            Spacer()
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(valueColor ?? palette.ink)
+        }
+    }
+
+    private func syncRailCamera() {
+        let target: CLLocationCoordinate2D?
+        if let live = selectedLive {
+            target = live.coordinate
+        } else if let sample = selectedSample {
+            target = sample.coordinate
+        } else {
+            target = search.results.first?.coordinate
+        }
+        guard let target else {
+            railCamera = .automatic
+            return
+        }
+        railCamera = .region(
+            MKCoordinateRegion(center: target, latitudinalMeters: 750, longitudinalMeters: 750)
+        )
+    }
+
+    private func openInMaps(name: String, coordinate: CLLocationCoordinate2D) {
+        var components = URLComponents(string: "https://maps.apple.com/")
+        components?.queryItems = [
+            URLQueryItem(name: "ll", value: "\(coordinate.latitude),\(coordinate.longitude)"),
+            URLQueryItem(name: "q", value: name),
+        ]
+        if let url = components?.url {
+            openURL(url)
+        }
     }
 
     private func locate(initial: Bool) async {
