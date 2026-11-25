@@ -345,7 +345,8 @@ private struct FeedView: View {
                                 FrostedGlassCard(
                                     palette: palette,
                                     rippleStart: rippleStart,
-                                    rippleOrigin: rippleOrigin
+                                    rippleOrigin: rippleOrigin,
+                                    seed: place.id.unicodeScalars.reduce(17) { $0 &* 31 &+ Int($1.value) }
                                 ) {
                                     featuredPlaceContent(
                                         title: place.name,
@@ -457,7 +458,8 @@ private struct FeedView: View {
                     FrostedGlassCard(
                         palette: palette,
                         rippleStart: rippleStart,
-                        rippleOrigin: rippleOrigin
+                        rippleOrigin: rippleOrigin,
+                        seed: 4219
                     ) {
                         VStack(alignment: .leading, spacing: 10) {
                             VStack(alignment: .leading, spacing: 3) {
@@ -668,7 +670,8 @@ private struct FeedView: View {
             FrostedGlassCard(
                 palette: palette,
                 rippleStart: rippleStart,
-                rippleOrigin: rippleOrigin
+                rippleOrigin: rippleOrigin,
+                seed: place.id.unicodeScalars.reduce(7) { $0 &* 31 &+ Int($1.value) }
             ) {
                 featuredPlaceContent(
                     title: place.name,

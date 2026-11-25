@@ -58,7 +58,7 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
 
 ## 4. Optical Frosted-Glass Refraction
 
-- **Two-plane legibility:** `RefractedReticleSurface` renders the ambient caustic wash and sparse `+ ·` calibration reticle into one static `Canvas` layer underneath sharp foreground SwiftUI text.
+- **Two-plane legibility:** `RefractedReticleSurface` renders the ambient caustic wash and a deterministically scattered `+ · . : /` reticle (per-card hash seed with empty cells and subtle jitter so no mechanical grid or diagonal repeats appear) into one static `Canvas` layer underneath sharp foreground SwiftUI text.
 - **Single GPU pass:** When triggered by a tap, selection change, or re-ranking promotion, `TimelineView(.animation(paused: !isRippling))` advances a `0.62s` radial ripple through `ShaderLibrary.frostedRefraction`:
   - Displaces pixels radially along the smooth cosine wave band so the `+ ·` reticle visibly moves and bends on the wave.
   - Averages a 5-tap frosted optical blur scaled by wave intensity.

@@ -131,6 +131,7 @@ struct RefractedReticleSurface: View {
     let palette: SalioPalette
     let rippleStart: Date?
     let rippleOrigin: UnitPoint
+    var seed: Int = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -223,8 +224,8 @@ struct RefractedReticleSurface: View {
                 )
             )
 
-            let stepX: CGFloat = 20
-            let stepY: CGFloat = 18
+            let stepX: CGFloat = 19
+            let stepY: CGFloat = 17
             let cols = Int(size.width / stepX) + 1
             let rows = Int(size.height / stepY) + 1
             let plus = context.resolve(
@@ -235,15 +236,53 @@ struct RefractedReticleSurface: View {
                 Text("·").font(.system(size: 10, weight: .regular, design: .monospaced))
                     .foregroundStyle(palette.reticleSecondary)
             )
+            let period = context.resolve(
+                Text(".").font(.system(size: 9, weight: .regular, design: .monospaced))
+                    .foregroundStyle(palette.reticleSecondary)
+            )
+            let colon = context.resolve(
+                Text(":").font(.system(size: 8.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(palette.reticleSecondary)
+            )
+            let slash = context.resolve(
+                Text("/").font(.system(size: 8.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(palette.reticlePrimary.opacity(0.65))
+            )
 
             for row in 0..<rows {
                 for col in 0..<cols {
-                    let point = CGPoint(x: CGFloat(col) * stepX + 10, y: CGFloat(row) * stepY + 9)
-                    let isCross = (row * 3 + col).isMultiple(of: 4)
-                    context.draw(isCross ? plus : dot, at: point, anchor: .center)
+                    let h = Self.cellHash(row: row, col: col, seed: seed)
+                    let bucket = Int(h % 100)
+                    guard bucket >= 44 else { continue }
+
+                    let jitterX = CGFloat(Int((h >> 8) % 9) - 4) * 0.85
+                    let jitterY = CGFloat(Int((h >> 12) % 9) - 4) * 0.85
+                    let point = CGPoint(
+                        x: CGFloat(col) * stepX + 10 + jitterX,
+                        y: CGFloat(row) * stepY + 9 + jitterY
+                    )
+
+                    let glyph: GraphicsContext.ResolvedText
+                    switch bucket {
+                    case 44..<74: glyph = dot
+                    case 74..<87: glyph = period
+                    case 87..<95: glyph = plus
+                    case 95..<98: glyph = colon
+                    default: glyph = slash
+                    }
+                    context.draw(glyph, at: point, anchor: .center)
                 }
             }
         }
+    }
+
+    private static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
+        var h = UInt64(bitPattern: Int64(row &* 73_856_093 ^ col &* 19_349_663 ^ seed &* 83_492_791))
+        h ^= h >> 30
+        h &*= 0xBF58_476D_1CE4_E5B9
+        h ^= h >> 27
+        h &*= 0x94D0_49BB_1331_11EB
+        return h ^ (h >> 31)
     }
 }
 
@@ -251,6 +290,7 @@ struct FrostedGlassCard<Content: View>: View {
     let palette: SalioPalette
     let rippleStart: Date?
     let rippleOrigin: UnitPoint
+    var seed: Int = 0
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -258,7 +298,8 @@ struct FrostedGlassCard<Content: View>: View {
             RefractedReticleSurface(
                 palette: palette,
                 rippleStart: rippleStart,
-                rippleOrigin: rippleOrigin
+                rippleOrigin: rippleOrigin,
+                seed: seed
             )
             content()
                 .padding(16)
