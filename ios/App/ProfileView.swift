@@ -28,8 +28,10 @@ struct ProfileView: View {
     let onSave: ([String]) -> Void
     let onReset: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
+    @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @Query private var saved: [Preferences]
     @State private var interests: Set<String> = []
     @State private var budget: String?
@@ -37,6 +39,10 @@ struct ProfileView: View {
     @State private var confirmingDiscard = false
     @State private var confirmingReset = false
     @State private var showingError = false
+
+    private var palette: SalioPalette {
+        appearance.palette(for: colorScheme)
+    }
 
     private var hasChanges: Bool {
         interests != Set(saved.first?.interests ?? [])
@@ -54,6 +60,7 @@ struct ProfileView: View {
                 } footer: {
                     Text("Saved on this device. Matching Nearby places appear first.")
                 }
+                .listRowBackground(palette.card)
 
                 if !interestsOnly {
                     Picker("Budget", selection: $budget) {
@@ -64,18 +71,35 @@ struct ProfileView: View {
                     }
                     .accessibilityValue(budget ?? "Not set")
                     .accessibilityIdentifier("profile-budget")
+                    .listRowBackground(palette.card)
 
                     Section("Getting around") {
                         choices(["Walking", "Public transport", "Driving"], selection: $transport)
                     }
+                    .listRowBackground(palette.card)
+
+                    Section("Appearance") {
+                        Picker("Theme", selection: $appearance) {
+                            ForEach(SalioAppearance.allCases) { option in
+                                Text(option.displayName).tag(option)
+                            }
+                        }
+                        .accessibilityValue(appearance.displayName)
+                        .accessibilityIdentifier("profile-theme")
+                    }
+                    .listRowBackground(palette.card)
 
                     if !saved.isEmpty {
                         Section {
                             Button("Reset preferences", role: .destructive) { confirmingReset = true }
                         }
+                        .listRowBackground(palette.card)
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(palette.ground)
+            .tint(palette.signal)
             .navigationTitle(interestsOnly ? "Choose interests" : "Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

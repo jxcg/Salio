@@ -247,7 +247,9 @@ private struct FeedView: View {
     private let entries = FeedEntry.samples
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
+    @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
@@ -262,6 +264,17 @@ private struct FeedView: View {
     @State private var didLocate = false
     @State private var showMap = false
     @State private var camera: MapCameraPosition = .automatic
+    @State private var rippleStart: Date?
+    @State private var rippleOrigin = UnitPoint(x: 0.62, y: 0.42)
+
+    private var palette: SalioPalette {
+        appearance.palette(for: colorScheme)
+    }
+
+    private func triggerRipple(at origin: UnitPoint = UnitPoint(x: 0.62, y: 0.42)) {
+        rippleOrigin = origin
+        rippleStart = Date()
+    }
 
     private static var interestSetupKey: String {
         #if DEBUG
@@ -329,16 +342,20 @@ private struct FeedView: View {
                     placesMap
                         .safeAreaInset(edge: .bottom) {
                             if let place = selectedLive {
-                                rowLabel(
-                                    title: place.name,
-                                    subtitle: place.address,
-                                    reason: search.matchReason(for: place, interests: activeInterests),
-                                    leaveBy: nil,
-                                    selected: false
-                                )
-                                    .padding(.horizontal)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(.regularMaterial)
+                                FrostedGlassCard(
+                                    palette: palette,
+                                    rippleStart: rippleStart,
+                                    rippleOrigin: rippleOrigin
+                                ) {
+                                    featuredPlaceContent(
+                                        title: place.name,
+                                        subtitle: place.address,
+                                        reason: search.matchReason(for: place, interests: activeInterests),
+                                        selected: true
+                                    )
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 8)
                             }
                         }
                 } else {
@@ -350,6 +367,7 @@ private struct FeedView: View {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if !showMap, center != nil {
                         Button("Refresh nearby", systemImage: "arrow.clockwise") {
+                            triggerRipple()
                             Task { await locate(initial: false) }
                         }
                         .disabled(locating || search.status == .searching)
@@ -358,6 +376,7 @@ private struct FeedView: View {
                     if search.status == .results {
                         Button(showMap ? "Show list" : "Show map", systemImage: showMap ? "list.bullet" : "map") {
                             showMap.toggle()
+                            triggerRipple()
                         }
                         .accessibilityIdentifier(showMap ? "show-list" : "show-map")
                     }
@@ -366,6 +385,7 @@ private struct FeedView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .tint(palette.signal)
         .sheet(item: $profileSheet) { sheet in
             switch profileContainer {
             case .success(let container):
@@ -375,10 +395,12 @@ private struct FeedView: View {
                         finishedInterestSetup = true
                         activeInterests = interests
                         search.reprioritize(for: interests)
+                        triggerRipple(at: UnitPoint(x: 0.50, y: 0.44))
                     },
                     onReset: {
                         activeInterests = []
                         search.reprioritize(for: [])
+                        triggerRipple(at: UnitPoint(x: 0.50, y: 0.44))
                     }
                 )
                 .modelContainer(container)
@@ -388,50 +410,132 @@ private struct FeedView: View {
         .task { await locate(initial: true) }
         .onChange(of: search.results) {
             camera = .automatic
+            triggerRipple()
+        }
+        .onChange(of: appearance) {
+            triggerRipple()
         }
     }
 
     private var placeList: some View {
-        List {
-            Section {
-                TextField("Search places", text: $search.query, prompt: Text("Search places"))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(palette.muted)
+                        .accessibilityHidden(true)
+                    TextField(
+                        "Search places",
+                        text: $search.query,
+                        prompt: Text("Search places").foregroundStyle(palette.muted)
+                    )
+                    .foregroundStyle(palette.ink)
                     .submitLabel(.search)
-                    .onSubmit { Task { await search.submit(near: center) } }
+                    .onSubmit {
+                        triggerRipple()
+                        Task { await search.submit(near: center) }
+                    }
                     .disabled(search.status == .searching)
                     .accessibilityIdentifier("search-field")
-            }
-            if showSearchCountInstrument {
-                Text("Searches: \(search.searchCount)")
-                    .accessibilityIdentifier("search-count")
-            }
-            searchSections
-            if !finishedInterestSetup, case .success = profileContainer {
-                Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Make it yours").font(.headline)
-                        Text("Choose what you like to see matching places first.")
-                            .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(palette.card, in: Capsule())
+                .overlay(Capsule().strokeBorder(palette.border, lineWidth: 1))
+
+                if showSearchCountInstrument {
+                    Text("Searches: \(search.searchCount)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(palette.muted)
+                        .accessibilityIdentifier("search-count")
+                }
+
+                searchSections
+
+                if !finishedInterestSetup, case .success = profileContainer {
+                    FrostedGlassCard(
+                        palette: palette,
+                        rippleStart: rippleStart,
+                        rippleOrigin: rippleOrigin
+                    ) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Make it yours")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(palette.ink)
+                                Text("Choose what you like to see matching places first.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(palette.muted)
+                            }
+                            HStack(spacing: 8) {
+                                Button("Choose interests") {
+                                    triggerRipple(at: UnitPoint(x: 0.30, y: 0.72))
+                                    profileSheet = .onboarding
+                                }
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(palette.onCTA)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(palette.ink, in: Capsule())
+                                .buttonStyle(.plain)
+
+                                Button("Skip for now") {
+                                    finishedInterestSetup = true
+                                }
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(palette.ink)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(palette.soft, in: Capsule())
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Button("Choose interests") { profileSheet = .onboarding }
-                    Button("Skip for now") { finishedInterestSetup = true }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Sample places")
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(palette.muted)
+                        .padding(.horizontal, 4)
+
+                    VStack(spacing: 0) {
+                        ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                            if index > 0 {
+                                Divider().overlay(palette.border)
+                                    .padding(.leading, 16)
+                            }
+                            sampleRow(entry)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 6)
+                        }
+                    }
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(palette.border, lineWidth: 1)
+                    )
                 }
             }
-            Section("Sample places") {
-                ForEach(entries) { entry in
-                    sampleRow(entry)
-                }
-            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 20)
         }
+        .background(palette.ground.ignoresSafeArea())
     }
 
     private var placesMap: some View {
         Map(position: $camera) {
             ForEach(search.results) { place in
                 let selected = selection == .live(place.id)
-                let color: Color = selected ? .accentColor : .red
+                let color: Color = selected ? palette.signal : palette.ink
                 Annotation(place.name, coordinate: place.coordinate) {
                     Button {
                         selection = .live(place.id)
+                        triggerRipple(at: UnitPoint(x: 0.50, y: 0.45))
                     } label: {
                         Image(systemName: "mappin.circle.fill")
                             .font(.title2)
@@ -454,31 +558,80 @@ private struct FeedView: View {
     private var searchSections: some View {
         switch search.status {
         case .idle:
-            if locating {
-                ProgressView("Finding your location…")
-            } else {
-                Text("Search places or turn on location to see what’s nearby.")
-                    .foregroundStyle(.secondary)
+            statusCard {
+                if locating {
+                    ProgressView("Finding your location…")
+                        .tint(palette.signal)
+                        .foregroundStyle(palette.muted)
+                } else {
+                    Text("Search places or turn on location to see what’s nearby.")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.muted)
+                }
             }
         case .searching:
-            ProgressView("Finding places…")
+            statusCard {
+                ProgressView("Finding places…")
+                    .tint(palette.signal)
+                    .foregroundStyle(palette.muted)
+            }
         case .results:
-            Section("Results") {
-                ForEach(search.results) { place in
-                    liveRow(place)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Results")
+                    .font(.caption.weight(.semibold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(palette.muted)
+                    .padding(.horizontal, 4)
+
+                if let featured = search.results.first {
+                    featuredLiveRow(featured)
+                }
+
+                let remaining = Array(search.results.dropFirst())
+                if !remaining.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(Array(remaining.enumerated()), id: \.element.id) { index, place in
+                            if index > 0 {
+                                Divider().overlay(palette.border)
+                                    .padding(.leading, 16)
+                            }
+                            liveRow(place)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 6)
+                        }
+                    }
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(palette.border, lineWidth: 1)
+                    )
                 }
             }
         case .empty:
-            Section {
+            statusCard {
                 Text("No matches. Try a different search.")
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.muted)
             }
         case .failed:
-            Section {
+            statusCard {
                 Text("Can’t search right now. Try again.")
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.muted)
             }
         }
+    }
+
+    private func statusCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(palette.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(palette.border, lineWidth: 1)
+            )
     }
 
     private var showSearchCountInstrument: Bool {
@@ -493,6 +646,7 @@ private struct FeedView: View {
         let selected = selectedSample?.id == entry.id
         return Button {
             selection = .sample(entry.id)
+            triggerRipple()
         } label: {
             rowLabel(
                 title: entry.name,
@@ -505,10 +659,64 @@ private struct FeedView: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
+    private func featuredLiveRow(_ place: LivePlace) -> some View {
+        let selected = selection == .live(place.id)
+        return Button {
+            selection = .live(place.id)
+            triggerRipple(at: UnitPoint(x: 0.55, y: 0.48))
+        } label: {
+            FrostedGlassCard(
+                palette: palette,
+                rippleStart: rippleStart,
+                rippleOrigin: rippleOrigin
+            ) {
+                featuredPlaceContent(
+                    title: place.name,
+                    subtitle: place.address,
+                    reason: search.matchReason(for: place, interests: activeInterests),
+                    selected: selected
+                )
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(place.id)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func featuredPlaceContent(title: String, subtitle: String, reason: String?, selected: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
+                if let reason {
+                    Text(reason)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.signal)
+                }
+                Text(title)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(palette.ink)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(palette.muted)
+                }
+            }
+            Spacer(minLength: 8)
+            if selected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(palette.signal)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
     private func liveRow(_ place: LivePlace) -> some View {
         let selected = selection == .live(place.id)
         return Button {
             selection = .live(place.id)
+            triggerRipple()
         } label: {
             rowLabel(
                 title: place.name,
@@ -525,27 +733,33 @@ private struct FeedView: View {
 
     private func rowLabel(title: String, subtitle: String, reason: String? = nil, leaveBy: Date?, selected: Bool) -> some View {
         HStack {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.headline)
-                Text(subtitle).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(palette.ink)
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.muted)
                 if let reason {
                     Text(reason)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.tint)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.signal)
                 }
                 if let leaveBy {
                     Label {
                         Text("Leave by \(leaveBy.formatted(date: .omitted, time: .shortened))")
+                            .monospacedDigit()
                     } icon: {
                         Image(systemName: "clock")
                     }
                     .font(.subheadline.weight(.medium))
+                    .foregroundStyle(palette.leaveBy)
                 }
             }
             Spacer(minLength: 8)
             if selected {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.tint)
+                    .foregroundStyle(palette.signal)
                     .accessibilityHidden(true)
             }
         }
@@ -564,6 +778,7 @@ private struct FeedView: View {
                 } footer: {
                     Text("Your leave-by time includes the walk and an hour at the venue before it closes.")
                 }
+                .listRowBackground(palette.card)
             } else if let live = selectedLive {
                 Section {
                     contextTitle(live.name)
@@ -572,9 +787,12 @@ private struct FeedView: View {
                         LabeledContent("Why it’s here", value: reason)
                     }
                 }
+                .listRowBackground(palette.card)
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(palette.ground)
         .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
     }
 
@@ -620,7 +838,7 @@ private struct FeedView: View {
                 ZStack {
                     if showContextCue {
                         Rectangle()
-                            .fill(Color.accentColor.opacity(0.12))
+                            .fill(palette.signal.opacity(0.18))
                             .frame(width: 2, height: 18)
                             .colorEffect(ShaderLibrary.contextAccent(.boundingRect))
                             .offset(x: -6)
