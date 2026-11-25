@@ -66,6 +66,61 @@ final class SalioUITests: XCTestCase {
     }
     #endif
 
+    func testInterestSetupIsOptionalAndSkipPersists() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-SALIOStubSearch"]
+        app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = UUID().uuidString
+        app.launch()
+
+        let skip = app.buttons["Skip for now"]
+        XCTAssertTrue(skip.waitForExistence(timeout: 5))
+        XCTAssertTrue(searchField(in: app).isHittable)
+        skip.tap()
+        XCTAssertFalse(app.buttons["Choose interests"].exists)
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Choose interests"].exists)
+        app.buttons["Profile"].tap()
+        XCTAssertTrue(app.switches["Film"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.switches["Film"].value as? String, "0")
+    }
+
+    func testInterestSetupChangesNearbyOrderOnRefresh() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-SALIOStubSearch", "-SALIOStubLocation"]
+        app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = UUID().uuidString
+        app.launch()
+
+        let choose = app.buttons["Choose interests"]
+        let cinema = app.buttons["stub-cinema"]
+        let cafe = app.buttons["stub-cafe"]
+        XCTAssertTrue(cinema.waitForExistence(timeout: 10))
+        XCTAssertLessThan(cafe.frame.midY, cinema.frame.midY)
+        choose.tap()
+        let film = app.switches["Film"]
+        XCTAssertTrue(film.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["profile-budget"].exists)
+        XCTAssertFalse(app.switches["Walking"].exists)
+        tapToggle(film)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(choose.exists)
+
+        app.buttons["refresh-nearby"].tap()
+        XCTAssertTrue(cinema.waitForExistence(timeout: 10))
+        XCTAssertLessThan(cinema.frame.midY, cafe.frame.midY)
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(cinema.waitForExistence(timeout: 10))
+        XCTAssertFalse(choose.exists)
+        XCTAssertLessThan(cinema.frame.midY, cafe.frame.midY)
+    }
+
     func testProfileSavesAndResetsAcrossAppRelaunches() {
         continueAfterFailure = false
         let app = XCUIApplication()

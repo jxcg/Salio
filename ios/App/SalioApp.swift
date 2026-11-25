@@ -220,6 +220,11 @@ private enum Selection: Hashable {
 }
 
 private struct FeedView: View {
+    private enum ProfileSheet: String, Identifiable {
+        case onboarding, profile
+        var id: String { rawValue }
+    }
+
     let profileContainer: Result<ModelContainer, any Error>
     private let entries = FeedEntry.samples
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -231,12 +236,22 @@ private struct FeedView: View {
     @State private var wasClosed = false
     @State private var hingeOpen = false
     @State private var showContextCue = false
-    @State private var showingProfile = false
+    @State private var profileSheet: ProfileSheet?
+    @AppStorage(Self.interestSetupKey) private var finishedInterestSetup = false
     @State private var center: CLLocationCoordinate2D?
     @State private var locating = false
     @State private var didLocate = false
     @State private var showMap = false
     @State private var camera: MapCameraPosition = .automatic
+
+    private static var interestSetupKey: String {
+        #if DEBUG
+        if let store = ProcessInfo.processInfo.environment["SALIO_PROFILE_TEST_STORE"] {
+            return "finishedInterestSetup.\(store)"
+        }
+        #endif
+        return "finishedInterestSetup"
+    }
 
     private var selectedSample: FeedEntry? {
         if let selection, case .sample(let id) = selection, let entry = entries.first(where: { $0.id == id }) {
@@ -321,14 +336,16 @@ private struct FeedView: View {
                         }
                         .accessibilityIdentifier(showMap ? "show-list" : "show-map")
                     }
-                    Button("Profile", systemImage: "person.crop.circle") { showingProfile = true }
+                    Button("Profile", systemImage: "person.crop.circle") { profileSheet = .profile }
                 }
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .sheet(isPresented: $showingProfile) {
+        .sheet(item: $profileSheet) { sheet in
             switch profileContainer {
-            case .success(let container): ProfileView().modelContainer(container)
+            case .success(let container):
+                ProfileView(interestsOnly: sheet == .onboarding) { finishedInterestSetup = true }
+                    .modelContainer(container)
             case .failure: ContentUnavailableView("Profile unavailable", systemImage: "person.crop.circle")
             }
         }
@@ -352,6 +369,17 @@ private struct FeedView: View {
                     .accessibilityIdentifier("search-count")
             }
             searchSections
+            if !finishedInterestSetup, case .success = profileContainer {
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Make it yours").font(.headline)
+                        Text("Choose what you like to see matching places first.")
+                            .foregroundStyle(.secondary)
+                    }
+                    Button("Choose interests") { profileSheet = .onboarding }
+                    Button("Skip for now") { finishedInterestSetup = true }
+                }
+            }
             Section("Sample places") {
                 ForEach(entries) { entry in
                     sampleRow(entry)
