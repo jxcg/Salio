@@ -206,6 +206,37 @@ final class SalioUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Reset preferences"].exists)
     }
 
+    func testThemeChoicePersistsAcrossRelaunches() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-SALIOStubSearch", "-SALIOStubLocation"]
+        app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = UUID().uuidString
+        app.launch()
+
+        let profile = app.buttons["Profile"]
+        XCTAssertTrue(profile.waitForExistence(timeout: 10))
+        profile.tap()
+        app.swipeUp()
+
+        let theme = app.buttons["profile-theme"]
+        XCTAssertTrue(theme.waitForExistence(timeout: 5))
+        XCTAssertEqual(theme.value as? String, "Mist & Glass")
+        theme.tap()
+        app.buttons["Stone & Amber"].tap()
+        XCTAssertEqual(theme.value as? String, "Stone & Amber")
+        XCTAssertFalse(app.buttons["Save"].isEnabled)
+        app.buttons["Cancel"].tap()
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(profile.waitForExistence(timeout: 10))
+        profile.tap()
+        app.swipeUp()
+        XCTAssertTrue(theme.waitForExistence(timeout: 5))
+        XCTAssertEqual(theme.value as? String, "Stone & Amber")
+        XCTAssertFalse(app.buttons["Reset preferences"].exists)
+    }
+
     private func tapToggle(_ toggle: XCUIElement) {
         // The accessibility element spans the row; the switch control is at its trailing edge.
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
