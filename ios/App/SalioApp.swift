@@ -257,6 +257,7 @@ private struct FeedView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openURL) private var openURL
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @State private var selection: Selection?
@@ -276,6 +277,7 @@ private struct FeedView: View {
     @State private var railCamera: MapCameraPosition = .automatic
     @State private var featuredCardRipple = 0
     @State private var mapCardRipple = 0
+    @State private var compactFeedWidth: CGFloat?
 
     private var palette: SalioPalette {
         appearance.palette(for: colorScheme)
@@ -534,8 +536,15 @@ private struct FeedView: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 20)
-            .frame(maxWidth: 460)
+            .frame(maxWidth: horizontalSizeClass == .regular ? (compactFeedWidth ?? 382) : .infinity)
             .frame(maxWidth: .infinity)
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            if horizontalSizeClass == .compact, width > 0 {
+                compactFeedWidth = width
+            }
         }
         .background(palette.ground.ignoresSafeArea())
     }

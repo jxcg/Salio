@@ -55,7 +55,7 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
 - **Timing & micro-labels:** SF Mono / `.monospacedDigit()` for leave-by times and compact metadata.
 - **Corner radii:** `999pt` (`Capsule`) for search bar and primary action pills; `20pt` for focal cards; `16pt` for grouped row containers.
 - **Touch targets:** At least `44×44pt` for toolbar buttons and map pins.
-- **iPhone Duo compact map rail:** When unfolded, the left column stays constrained to a compact rail (`270–340pt`, ~34% of the display) pairing a live muted Apple Map crop (`180pt`) with a frosted-glass Timing / Place details card (`Open in Maps` for live places), while the right-hand Nearby feed stays framed near its folded cover width (`maxWidth: 460pt`) for continuous paper-like proportions across hinge transitions.
+- **iPhone Duo compact map rail:** When unfolded, the left column stays constrained to a compact rail (`270–340pt`, ~34% of the display) pairing a live muted Apple Map crop (`180pt`) with a frosted-glass Timing / Place details card (`Open in Maps` for live places), while the right-hand Nearby feed locks to its measured closed-Duo cover width (`compactFeedWidth`, defaulting to `382pt`) so card widths, line wraps, and vertical rhythm stay identical across fold and unfold.
 
 ## 4. Optical Frosted-Glass Refraction
 
