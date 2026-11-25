@@ -279,6 +279,7 @@ private struct FeedView: View {
     @State private var mapCardRipple = 0
     @State private var railContextRipple = 0
     @State private var unfoldCount = 0
+    @State private var mapUnfoldReveal = 0
     @State private var railMapSettled = true
     @State private var railCardSettled = true
     @State private var compactFeedWidth: CGFloat?
@@ -292,7 +293,7 @@ private struct FeedView: View {
         if let live = selectedLive { base = "live-\(live.id)" }
         else if let sample = selectedSample { base = "sample-\(sample.id)" }
         else { base = "initial" }
-        return "\(base)-u\(unfoldCount)"
+        return "\(base)-u\(mapUnfoldReveal)"
     }
 
     private static var interestSetupKey: String {
@@ -330,15 +331,21 @@ private struct FeedView: View {
                 hingeOpen = status == .fullyOpen
                 let didUnfold = hingeOpen && wasClosed && allowsContextCue
                 showContextCue = didUnfold
-                if didUnfold {
-                    unfoldCount += 1
-                    railMapSettled = false
-                    railCardSettled = false
-                }
                 if status == .closed {
                     wasClosed = true
+                    if allowsContextCue {
+                        railMapSettled = false
+                        railCardSettled = false
+                    }
+                } else if didUnfold {
+                    railMapSettled = false
+                    railCardSettled = false
+                    unfoldCount += 1
+                    wasClosed = false
                 } else if status == .fullyOpen || status == nil {
                     wasClosed = false
+                    railMapSettled = true
+                    railCardSettled = true
                 }
             }
             .task(id: unfoldCount) {
@@ -347,14 +354,18 @@ private struct FeedView: View {
                     railCardSettled = true
                     return
                 }
-                withAnimation(.spring(response: 0.42, dampingFraction: 0.80)) {
-                    railMapSettled = true
-                }
                 do {
-                    try await Task.sleep(for: .milliseconds(65))
-                    withAnimation(.spring(response: 0.46, dampingFraction: 0.78)) {
+                    // Let the inner Duo display reach full brightness before unfolding the rail.
+                    try await Task.sleep(for: .milliseconds(180))
+                    withAnimation(.spring(response: 0.52, dampingFraction: 0.72)) {
+                        railMapSettled = true
+                    }
+                    mapUnfoldReveal += 1
+                    try await Task.sleep(for: .milliseconds(110))
+                    withAnimation(.spring(response: 0.58, dampingFraction: 0.70)) {
                         railCardSettled = true
                     }
+                    try await Task.sleep(for: .milliseconds(110))
                     railContextRipple += 1
                 } catch {
                     railMapSettled = true
@@ -819,27 +830,31 @@ private struct FeedView: View {
         .contentShape(Rectangle())
     }
 
-    @ViewBuilder
     private var placeContext: some View {
-        ScrollView {
+        let mapOpen = railMapSettled || !allowsContextCue
+        let cardOpen = railCardSettled || !allowsContextCue
+        return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 railMap
-                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey)
+                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey, hold: !mapOpen)
                     .frame(height: 180)
+                    .overlay(alignment: .trailing) {
+                        hingeCreaseShade(opacity: mapOpen ? 0 : 0.10)
+                    }
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .strokeBorder(palette.border, lineWidth: 1)
                     )
-                    .offset(x: railMapSettled ? 0 : 14)
-                    .scaleEffect(railMapSettled ? 1 : 0.975, anchor: .trailing)
+                    .offset(x: mapOpen ? 0 : 10)
+                    .scaleEffect(x: mapOpen ? 1 : 0.92, y: mapOpen ? 1 : 0.97, anchor: .trailing)
                     .rotation3DEffect(
-                        .degrees(railMapSettled ? 0 : -4.5),
+                        .degrees(mapOpen ? 0 : -11),
                         axis: (x: 0, y: 1, z: 0),
                         anchor: .trailing,
-                        perspective: 0.45
+                        perspective: 0.42
                     )
-                    .opacity(railMapSettled ? 1 : 0.88)
+                    .opacity(mapOpen ? 1 : 0.45)
 
                 if let sample = selectedSample {
                     FrostedGlassCard(
@@ -876,15 +891,19 @@ private struct FeedView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .offset(x: railCardSettled ? 0 : 18)
-                    .scaleEffect(railCardSettled ? 1 : 0.968, anchor: .trailing)
+                    .overlay(alignment: .trailing) {
+                        hingeCreaseShade(opacity: cardOpen ? 0 : 0.12)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
+                    .offset(x: cardOpen ? 0 : 10)
+                    .scaleEffect(x: cardOpen ? 1 : 0.90, y: cardOpen ? 1 : 0.96, anchor: .trailing)
                     .rotation3DEffect(
-                        .degrees(railCardSettled ? 0 : -5.5),
+                        .degrees(cardOpen ? 0 : -13),
                         axis: (x: 0, y: 1, z: 0),
                         anchor: .trailing,
-                        perspective: 0.45
+                        perspective: 0.42
                     )
-                    .opacity(railCardSettled ? 1 : 0.82)
+                    .opacity(cardOpen ? 1 : 0.35)
                 } else if let live = selectedLive {
                     FrostedGlassCard(
                         palette: palette,
@@ -917,23 +936,39 @@ private struct FeedView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .offset(x: railCardSettled ? 0 : 18)
-                    .scaleEffect(railCardSettled ? 1 : 0.968, anchor: .trailing)
+                    .overlay(alignment: .trailing) {
+                        hingeCreaseShade(opacity: cardOpen ? 0 : 0.12)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
+                    .offset(x: cardOpen ? 0 : 10)
+                    .scaleEffect(x: cardOpen ? 1 : 0.90, y: cardOpen ? 1 : 0.96, anchor: .trailing)
                     .rotation3DEffect(
-                        .degrees(railCardSettled ? 0 : -5.5),
+                        .degrees(cardOpen ? 0 : -13),
                         axis: (x: 0, y: 1, z: 0),
                         anchor: .trailing,
-                        perspective: 0.45
+                        perspective: 0.42
                     )
-                    .opacity(railCardSettled ? 1 : 0.82)
+                    .opacity(cardOpen ? 1 : 0.35)
                 }
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 20)
         }
+        .scrollClipDisabled()
         .background(palette.ground.ignoresSafeArea())
         .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
+    }
+
+    private func hingeCreaseShade(opacity: Double) -> some View {
+        LinearGradient(
+            colors: [.clear, palette.ink.opacity(opacity)],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .frame(width: 44)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private var railMap: some View {

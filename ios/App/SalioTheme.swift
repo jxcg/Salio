@@ -341,6 +341,7 @@ struct FrostedGlassCard<Content: View>: View {
 struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
     let palette: SalioPalette
     let trigger: Trigger
+    let hold: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -348,21 +349,22 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
     @State private var revealStart: Date?
     @State private var isRevealing = false
 
-    private let duration: TimeInterval = 0.60
+    private let duration: TimeInterval = 0.85
 
     private var allowsReveal: Bool {
         !reduceMotion && !voiceOver && contrast != .increased
     }
 
     func body(content: Content) -> some View {
-        TimelineView(.animation(paused: !(isRevealing && allowsReveal))) { timeline in
-            let progress = isRevealing ? revealProgress(at: timeline.date) : nil
+        let holding = allowsReveal && hold
+        TimelineView(.animation(paused: !(isRevealing && allowsReveal && !holding))) { timeline in
+            let progress: Double? = holding ? 0 : (isRevealing ? revealProgress(at: timeline.date) : nil)
             let active = allowsReveal && progress != nil
             let t = progress ?? 1
             let ease = 1 - pow(1 - t, 3)
-            let blurAmount = active ? (1 - ease) * 10 : 0
-            let veilOpacity = active ? (1 - ease) * 0.92 : 0
-            let frameSeed = Int(t * 5) * 131 + 19
+            let blurAmount = active ? (1 - ease) * 12 : 0
+            let veilOpacity = active ? (1 - ease) * 0.96 : 0
+            let frameSeed = Int(t * 7) * 131 + 19
 
             content
                 .blur(radius: blurAmount)
@@ -376,7 +378,7 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
                 }
         }
         .task(id: trigger) {
-            guard allowsReveal else {
+            guard allowsReveal, !hold else {
                 isRevealing = false
                 revealStart = nil
                 return
@@ -384,7 +386,7 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
             revealStart = Date()
             isRevealing = true
             do {
-                try await Task.sleep(for: .milliseconds(640))
+                try await Task.sleep(for: .milliseconds(900))
                 isRevealing = false
             } catch {
                 // Newer map transition cancels the pending reveal stop cleanly.
@@ -403,28 +405,28 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
         Canvas(rendersAsynchronously: false) { context, size in
             context.fill(
                 Path(CGRect(origin: .zero, size: size)),
-                with: .color(palette.card.opacity(0.55))
+                with: .color(palette.card.opacity(0.62))
             )
 
-            let stepX: CGFloat = 18
-            let stepY: CGFloat = 16
+            let stepX: CGFloat = 17
+            let stepY: CGFloat = 15
             let cols = Int(size.width / stepX) + 1
             let rows = Int(size.height / stepY) + 1
             let plus = context.resolve(
-                Text("+").font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(palette.signal.opacity(0.55))
+                Text("+").font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(palette.signal.opacity(0.72))
             )
             let dot = context.resolve(
-                Text("·").font(.system(size: 10, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.ink.opacity(0.28))
+                Text("·").font(.system(size: 10.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(palette.ink.opacity(0.36))
             )
             let colon = context.resolve(
-                Text(":").font(.system(size: 8.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.ink.opacity(0.22))
+                Text(":").font(.system(size: 9, weight: .regular, design: .monospaced))
+                    .foregroundStyle(palette.ink.opacity(0.30))
             )
             let slash = context.resolve(
-                Text("/").font(.system(size: 8.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.ink.opacity(0.25))
+                Text("/").font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(palette.ink.opacity(0.34))
             )
 
             for row in 0..<rows {
@@ -455,7 +457,11 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
 }
 
 extension View {
-    func mapBlurReveal<Trigger: Equatable>(palette: SalioPalette, trigger: Trigger) -> some View {
-        modifier(MapBlurRevealModifier(palette: palette, trigger: trigger))
+    func mapBlurReveal<Trigger: Equatable>(
+        palette: SalioPalette,
+        trigger: Trigger,
+        hold: Bool = false
+    ) -> some View {
+        modifier(MapBlurRevealModifier(palette: palette, trigger: trigger, hold: hold))
     }
 }
