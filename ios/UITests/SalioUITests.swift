@@ -196,6 +196,7 @@ final class SalioUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(cafe.waitForExistence(timeout: 10))
         XCTAssertTrue(cinema.exists)
+        XCTAssertTrue(app.buttons["Choose interests"].exists)
         XCTAssertFalse(app.staticTexts["Matches Film"].exists)
         XCTAssertLessThan(cafe.frame.midY, cinema.frame.midY)
         profile.tap()
