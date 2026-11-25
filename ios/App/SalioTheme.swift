@@ -276,7 +276,7 @@ struct RefractedReticleSurface: View {
         }
     }
 
-    private static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
+    static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
         var h = UInt64(bitPattern: Int64(row &* 73_856_093 ^ col &* 19_349_663 ^ seed &* 83_492_791))
         h ^= h >> 30
         h &*= 0xBF58_476D_1CE4_E5B9
@@ -288,26 +288,174 @@ struct RefractedReticleSurface: View {
 
 struct FrostedGlassCard<Content: View>: View {
     let palette: SalioPalette
-    let rippleStart: Date?
-    let rippleOrigin: UnitPoint
     var seed: Int = 0
+    var rippleTrigger: Int = 0
+    var tapToRipple: Bool = false
     @ViewBuilder let content: () -> Content
 
+    @State private var rippleStart: Date?
+    @State private var rippleOrigin = UnitPoint(x: 0.55, y: 0.48)
+    @State private var cardSize: CGSize = .zero
+
     var body: some View {
-        ZStack(alignment: .leading) {
-            RefractedReticleSurface(
-                palette: palette,
-                rippleStart: rippleStart,
-                rippleOrigin: rippleOrigin,
-                seed: seed
+        content()
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RefractedReticleSurface(
+                    palette: palette,
+                    rippleStart: rippleStart,
+                    rippleOrigin: rippleOrigin,
+                    seed: seed
+                )
+            }
+            .onGeometryChange(for: CGSize.self) { proxy in
+                proxy.size
+            } action: { newSize in
+                cardSize = newSize
+            }
+            .simultaneousGesture(
+                SpatialTapGesture().onEnded { value in
+                    let width = max(cardSize.width, 1)
+                    let height = max(cardSize.height, 1)
+                    rippleOrigin = UnitPoint(
+                        x: min(max(value.location.x / width, 0.08), 0.92),
+                        y: min(max(value.location.y / height, 0.08), 0.92)
+                    )
+                    rippleStart = Date()
+                },
+                isEnabled: tapToRipple
             )
-            content()
-                .padding(16)
+            .onChange(of: rippleTrigger) {
+                rippleOrigin = UnitPoint(x: 0.55, y: 0.48)
+                rippleStart = Date()
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(palette.border, lineWidth: 1)
+            )
+    }
+}
+
+struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
+    let palette: SalioPalette
+    let trigger: Trigger
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
+    @State private var revealStart: Date?
+    @State private var isRevealing = false
+
+    private let duration: TimeInterval = 0.60
+
+    private var allowsReveal: Bool {
+        !reduceMotion && !voiceOver && contrast != .increased
+    }
+
+    func body(content: Content) -> some View {
+        TimelineView(.animation(paused: !(isRevealing && allowsReveal))) { timeline in
+            let progress = isRevealing ? revealProgress(at: timeline.date) : nil
+            let active = allowsReveal && progress != nil
+            let t = progress ?? 1
+            let ease = 1 - pow(1 - t, 3)
+            let blurAmount = active ? (1 - ease) * 10 : 0
+            let veilOpacity = active ? (1 - ease) * 0.92 : 0
+            let frameSeed = Int(t * 5) * 131 + 19
+
+            content
+                .blur(radius: blurAmount)
+                .overlay {
+                    if veilOpacity > 0.01 {
+                        mapAsciiVeil(seed: frameSeed)
+                            .opacity(veilOpacity)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(palette.border, lineWidth: 1)
-        )
+        .task(id: trigger) {
+            guard allowsReveal else {
+                isRevealing = false
+                revealStart = nil
+                return
+            }
+            revealStart = Date()
+            isRevealing = true
+            do {
+                try await Task.sleep(for: .milliseconds(640))
+                isRevealing = false
+            } catch {
+                // Newer map transition cancels the pending reveal stop cleanly.
+            }
+        }
+    }
+
+    private func revealProgress(at date: Date) -> Double? {
+        guard let revealStart else { return nil }
+        let elapsed = date.timeIntervalSince(revealStart)
+        guard elapsed >= 0, elapsed < duration else { return nil }
+        return elapsed / duration
+    }
+
+    private func mapAsciiVeil(seed: Int) -> some View {
+        Canvas(rendersAsynchronously: false) { context, size in
+            context.fill(
+                Path(CGRect(origin: .zero, size: size)),
+                with: .color(palette.card.opacity(0.55))
+            )
+
+            let stepX: CGFloat = 18
+            let stepY: CGFloat = 16
+            let cols = Int(size.width / stepX) + 1
+            let rows = Int(size.height / stepY) + 1
+            let plus = context.resolve(
+                Text("+").font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(palette.signal.opacity(0.55))
+            )
+            let dot = context.resolve(
+                Text("·").font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .foregroundStyle(palette.ink.opacity(0.28))
+            )
+            let colon = context.resolve(
+                Text(":").font(.system(size: 8.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(palette.ink.opacity(0.22))
+            )
+            let slash = context.resolve(
+                Text("/").font(.system(size: 8.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(palette.ink.opacity(0.25))
+            )
+
+            for row in 0..<rows {
+                for col in 0..<cols {
+                    let h = RefractedReticleSurface.cellHash(row: row, col: col, seed: seed)
+                    let bucket = Int(h % 100)
+                    guard bucket >= 42 else { continue }
+
+                    let jitterX = CGFloat(Int((h >> 8) % 7) - 3) * 0.9
+                    let jitterY = CGFloat(Int((h >> 12) % 7) - 3) * 0.9
+                    let point = CGPoint(
+                        x: CGFloat(col) * stepX + 9 + jitterX,
+                        y: CGFloat(row) * stepY + 8 + jitterY
+                    )
+
+                    let glyph: GraphicsContext.ResolvedText
+                    switch bucket {
+                    case 42..<72: glyph = dot
+                    case 72..<86: glyph = colon
+                    case 86..<95: glyph = plus
+                    default: glyph = slash
+                    }
+                    context.draw(glyph, at: point, anchor: .center)
+                }
+            }
+        }
+    }
+}
+
+extension View {
+    func mapBlurReveal<Trigger: Equatable>(palette: SalioPalette, trigger: Trigger) -> some View {
+        modifier(MapBlurRevealModifier(palette: palette, trigger: trigger))
     }
 }

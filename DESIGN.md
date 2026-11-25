@@ -64,7 +64,9 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
   - Displaces pixels radially along the smooth cosine wave band so the `+ ·` reticle visibly moves and bends on the wave.
   - Averages a 5-tap frosted optical blur scaled by wave intensity.
   - Samples Red (`0.72×`), Green (`1.0×`), and Blue (`1.30×`) along the lens offset so natural warm/cool edge dispersion emerges only from bending light—never painted on as static red/blue chrome.
-- **Zero idle burn:** Outside the `0.62s` ripple window, `TimelineView` pauses and `.layerEffect(..., isEnabled: false)` bypasses the shader completely.
+- **Scoped per-card ripple:** Each `FrostedGlassCard` manages its own tap origin and ripple state (`SpatialTapGesture`) so a tap ripples **only** the card you touched—never sibling cards.
+- **Map blur-to-reveal ASCII veil:** When the Duo map rail or full-screen map appears or pans to a newly selected place, `MapBlurRevealModifier` briefly (`0.60s`) resolves a `10pt → 0pt` blur alongside a shifting organic `+ · : /` ASCII scatter veil, then pauses completely with zero idle redraws (disabled under `Reduce Motion`, `VoiceOver`, and `Increase Contrast`).
+- **Zero idle burn:** Outside the active `0.60–0.62s` transition window, `TimelineView` pauses and `.layerEffect(..., isEnabled: false)` bypasses the shader completely.
 
 ## 5. Restraint & Accessibility Rules
 

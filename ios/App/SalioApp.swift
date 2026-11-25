@@ -274,16 +274,17 @@ private struct FeedView: View {
     @State private var showMap = false
     @State private var camera: MapCameraPosition = .automatic
     @State private var railCamera: MapCameraPosition = .automatic
-    @State private var rippleStart: Date?
-    @State private var rippleOrigin = UnitPoint(x: 0.62, y: 0.42)
+    @State private var featuredCardRipple = 0
+    @State private var mapCardRipple = 0
 
     private var palette: SalioPalette {
         appearance.palette(for: colorScheme)
     }
 
-    private func triggerRipple(at origin: UnitPoint = UnitPoint(x: 0.62, y: 0.42)) {
-        rippleOrigin = origin
-        rippleStart = Date()
+    private var railMapRevealKey: String {
+        if let live = selectedLive { return "live-\(live.id)" }
+        if let sample = selectedSample { return "sample-\(sample.id)" }
+        return "initial"
     }
 
     private static var interestSetupKey: String {
@@ -351,13 +352,14 @@ private struct FeedView: View {
             Group {
                 if showMap, search.status == .results {
                     placesMap
+                        .mapBlurReveal(palette: palette, trigger: showMap)
                         .safeAreaInset(edge: .bottom) {
                             if let place = selectedLive {
                                 FrostedGlassCard(
                                     palette: palette,
-                                    rippleStart: rippleStart,
-                                    rippleOrigin: rippleOrigin,
-                                    seed: place.id.unicodeScalars.reduce(17) { $0 &* 31 &+ Int($1.value) }
+                                    seed: place.id.unicodeScalars.reduce(17) { $0 &* 31 &+ Int($1.value) },
+                                    rippleTrigger: mapCardRipple,
+                                    tapToRipple: true
                                 ) {
                                     featuredPlaceContent(
                                         title: place.name,
@@ -379,7 +381,6 @@ private struct FeedView: View {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if !showMap, center != nil {
                         Button("Refresh nearby", systemImage: "arrow.clockwise") {
-                            triggerRipple()
                             Task { await locate(initial: false) }
                         }
                         .disabled(locating || search.status == .searching)
@@ -388,7 +389,6 @@ private struct FeedView: View {
                     if search.status == .results {
                         Button(showMap ? "Show list" : "Show map", systemImage: showMap ? "list.bullet" : "map") {
                             showMap.toggle()
-                            triggerRipple()
                         }
                         .accessibilityIdentifier(showMap ? "show-list" : "show-map")
                     }
@@ -407,12 +407,10 @@ private struct FeedView: View {
                         finishedInterestSetup = true
                         activeInterests = interests
                         search.reprioritize(for: interests)
-                        triggerRipple(at: UnitPoint(x: 0.50, y: 0.44))
                     },
                     onReset: {
                         activeInterests = []
                         search.reprioritize(for: [])
-                        triggerRipple(at: UnitPoint(x: 0.50, y: 0.44))
                     }
                 )
                 .modelContainer(container)
@@ -426,13 +424,9 @@ private struct FeedView: View {
         .onChange(of: search.results) {
             camera = .automatic
             syncRailCamera()
-            triggerRipple()
         }
         .onChange(of: selection) {
             syncRailCamera()
-        }
-        .onChange(of: appearance) {
-            triggerRipple()
         }
     }
 
@@ -452,7 +446,6 @@ private struct FeedView: View {
                     .foregroundStyle(palette.ink)
                     .submitLabel(.search)
                     .onSubmit {
-                        triggerRipple()
                         Task { await search.submit(near: center) }
                     }
                     .disabled(search.status == .searching)
@@ -475,9 +468,8 @@ private struct FeedView: View {
                 if !finishedInterestSetup, case .success = profileContainer {
                     FrostedGlassCard(
                         palette: palette,
-                        rippleStart: rippleStart,
-                        rippleOrigin: rippleOrigin,
-                        seed: 4219
+                        seed: 4219,
+                        tapToRipple: true
                     ) {
                         VStack(alignment: .leading, spacing: 10) {
                             VStack(alignment: .leading, spacing: 3) {
@@ -490,7 +482,6 @@ private struct FeedView: View {
                             }
                             HStack(spacing: 8) {
                                 Button("Choose interests") {
-                                    triggerRipple(at: UnitPoint(x: 0.30, y: 0.72))
                                     profileSheet = .onboarding
                                 }
                                 .font(.subheadline.weight(.semibold))
@@ -557,7 +548,7 @@ private struct FeedView: View {
                 Annotation(place.name, coordinate: place.coordinate) {
                     Button {
                         selection = .live(place.id)
-                        triggerRipple(at: UnitPoint(x: 0.50, y: 0.45))
+                        mapCardRipple += 1
                     } label: {
                         Image(systemName: "mappin.circle.fill")
                             .font(.title2)
@@ -668,7 +659,6 @@ private struct FeedView: View {
         let selected = selectedSample?.id == entry.id
         return Button {
             selection = .sample(entry.id)
-            triggerRipple()
         } label: {
             rowLabel(
                 title: entry.name,
@@ -685,13 +675,12 @@ private struct FeedView: View {
         let selected = selection == .live(place.id)
         return Button {
             selection = .live(place.id)
-            triggerRipple(at: UnitPoint(x: 0.55, y: 0.48))
+            featuredCardRipple += 1
         } label: {
             FrostedGlassCard(
                 palette: palette,
-                rippleStart: rippleStart,
-                rippleOrigin: rippleOrigin,
-                seed: place.id.unicodeScalars.reduce(7) { $0 &* 31 &+ Int($1.value) }
+                seed: place.id.unicodeScalars.reduce(7) { $0 &* 31 &+ Int($1.value) },
+                rippleTrigger: featuredCardRipple
             ) {
                 featuredPlaceContent(
                     title: place.name,
@@ -739,7 +728,6 @@ private struct FeedView: View {
         let selected = selection == .live(place.id)
         return Button {
             selection = .live(place.id)
-            triggerRipple()
         } label: {
             rowLabel(
                 title: place.name,
@@ -795,6 +783,7 @@ private struct FeedView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 railMap
+                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey)
                     .frame(height: 180)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay(
@@ -805,9 +794,8 @@ private struct FeedView: View {
                 if let sample = selectedSample {
                     FrostedGlassCard(
                         palette: palette,
-                        rippleStart: rippleStart,
-                        rippleOrigin: rippleOrigin,
-                        seed: sample.id.unicodeScalars.reduce(29) { $0 &* 31 &+ Int($1.value) }
+                        seed: sample.id.unicodeScalars.reduce(29) { $0 &* 31 &+ Int($1.value) },
+                        tapToRipple: true
                     ) {
                         VStack(alignment: .leading, spacing: 10) {
                             contextTitle(sample.name)
@@ -840,9 +828,8 @@ private struct FeedView: View {
                 } else if let live = selectedLive {
                     FrostedGlassCard(
                         palette: palette,
-                        rippleStart: rippleStart,
-                        rippleOrigin: rippleOrigin,
-                        seed: live.id.unicodeScalars.reduce(37) { $0 &* 31 &+ Int($1.value) }
+                        seed: live.id.unicodeScalars.reduce(37) { $0 &* 31 &+ Int($1.value) },
+                        tapToRipple: true
                     ) {
                         VStack(alignment: .leading, spacing: 10) {
                             if let reason = search.matchReason(for: live, interests: activeInterests) {
@@ -887,7 +874,6 @@ private struct FeedView: View {
                     Annotation(place.name, coordinate: place.coordinate) {
                         Button {
                             selection = .live(place.id)
-                            triggerRipple()
                         } label: {
                             Image(systemName: "mappin.circle.fill")
                                 .font(isSelected ? .title2 : .body)
