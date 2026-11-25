@@ -67,7 +67,7 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
 - **Scoped per-card ripple:** Each `FrostedGlassCard` manages its own tap origin and ripple state (`SpatialTapGesture`) so a tap ripples **only** the card you touched—never sibling cards.
 - **Map blur-to-reveal ASCII veil:** When the Duo map rail or full-screen map appears or pans to a newly selected place, `MapBlurRevealModifier` briefly (`0.85s`) resolves a `12pt → 0pt` blur alongside a shifting organic `+ · : /` ASCII scatter veil, then pauses completely with zero idle redraws (disabled under `Reduce Motion`, `VoiceOver`, and `Increase Contrast`).
 - **Subtle Duo paper-unfold play:** While closed, the left rail pre-arms tucked toward the center crease (`-11° / -13°` trailing-anchored hinge tilt, soft hinge crease shade, map held under its ASCII veil so there is no sharp-to-blurry pop). After a `180ms` hardware display handoff on `closed → fullyOpen`, the map swings open first (`.spring(response: 0.52, dampingFraction: 0.72)`) as its ASCII blur-to-reveal veil clears, followed `110ms` later by the frosted context card (`.spring(response: 0.58, dampingFraction: 0.70)`) and one gentle frosted ripple on the context card alone—while the right-hand feed stays anchored at its exact `350pt` closed width. Disabled under `Reduce Motion`, `VoiceOver`, and `Increase Contrast`.
-- **Zero idle burn:** Outside the active `0.60–0.62s` transition window, `TimelineView` pauses and `.layerEffect(..., isEnabled: false)` bypasses the shader completely.
+- **Zero idle burn:** Outside active transitions (`0.62s` frosted ripple, `0.85s` map reveal), `TimelineView` pauses and `.layerEffect(..., isEnabled: false)` bypasses the shader completely.
 
 ## 5. Restraint & Accessibility Rules
 

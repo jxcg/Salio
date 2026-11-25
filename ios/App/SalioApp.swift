@@ -15,11 +15,9 @@ struct SalioApp: App {
     }
 
     private static var profileStore: ModelConfiguration {
-        #if DEBUG
-        if let name = ProcessInfo.processInfo.environment["SALIO_PROFILE_TEST_STORE"] {
+        if let name = SalioTestStore.name {
             return ModelConfiguration(name, cloudKitDatabase: .none)
         }
-        #endif
         return ModelConfiguration(cloudKitDatabase: .none)
     }
 }
@@ -258,16 +256,13 @@ private struct FeedView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.openURL) private var openURL
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
     @State private var wasClosed = false
-    @State private var hingeOpen = false
-    @State private var showContextCue = false
     @State private var profileSheet: ProfileSheet?
-    @AppStorage(Self.interestSetupKey) private var finishedInterestSetup = false
+    @AppStorage(SalioTestStore.scopedKey("finishedInterestSetup")) private var finishedInterestSetup = false
     @State private var activeInterests: [String] = []
     @State private var center: CLLocationCoordinate2D?
     @State private var locating = false
@@ -279,7 +274,6 @@ private struct FeedView: View {
     @State private var mapCardRipple = 0
     @State private var railContextRipple = 0
     @State private var unfoldCount = 0
-    @State private var mapUnfoldReveal = 0
     @State private var railMapSettled = true
     @State private var railCardSettled = true
     @State private var compactFeedWidth: CGFloat?
@@ -289,20 +283,9 @@ private struct FeedView: View {
     }
 
     private var railMapRevealKey: String {
-        let base: String
-        if let live = selectedLive { base = "live-\(live.id)" }
-        else if let sample = selectedSample { base = "sample-\(sample.id)" }
-        else { base = "initial" }
-        return "\(base)-u\(mapUnfoldReveal)"
-    }
-
-    private static var interestSetupKey: String {
-        #if DEBUG
-        if let store = ProcessInfo.processInfo.environment["SALIO_PROFILE_TEST_STORE"] {
-            return "finishedInterestSetup.\(store)"
-        }
-        #endif
-        return "finishedInterestSetup"
+        if let live = selectedLive { return "live-\(live.id)" }
+        if let sample = selectedSample { return "sample-\(sample.id)" }
+        return "initial"
     }
 
     private var selectedSample: FeedEntry? {
@@ -317,7 +300,7 @@ private struct FeedView: View {
         return search.results.first { $0.id == id }
     }
 
-    private var allowsContextCue: Bool {
+    private var allowsUnfoldMotion: Bool {
         !reduceMotion && !voiceOver && contrast != .increased
     }
 
@@ -328,12 +311,10 @@ private struct FeedView: View {
             splitView.onHingeChange { old, new in
                 let status = new.hinge?.status
                 guard old.hinge?.status != status else { return }
-                hingeOpen = status == .fullyOpen
-                let didUnfold = hingeOpen && wasClosed && allowsContextCue
-                showContextCue = didUnfold
+                let didUnfold = status == .fullyOpen && wasClosed && allowsUnfoldMotion
                 if status == .closed {
                     wasClosed = true
-                    if allowsContextCue {
+                    if allowsUnfoldMotion {
                         railMapSettled = false
                         railCardSettled = false
                     }
@@ -349,7 +330,7 @@ private struct FeedView: View {
                 }
             }
             .task(id: unfoldCount) {
-                guard unfoldCount > 0, allowsContextCue else {
+                guard unfoldCount > 0, allowsUnfoldMotion else {
                     railMapSettled = true
                     railCardSettled = true
                     return
@@ -360,7 +341,6 @@ private struct FeedView: View {
                     withAnimation(.spring(response: 0.52, dampingFraction: 0.72)) {
                         railMapSettled = true
                     }
-                    mapUnfoldReveal += 1
                     try await Task.sleep(for: .milliseconds(110))
                     withAnimation(.spring(response: 0.58, dampingFraction: 0.70)) {
                         railCardSettled = true
@@ -370,15 +350,6 @@ private struct FeedView: View {
                 } catch {
                     railMapSettled = true
                     railCardSettled = true
-                }
-            }
-            .task(id: showContextCue) {
-                guard showContextCue else { return }
-                do {
-                    try await Task.sleep(for: .milliseconds(25))
-                    withAnimation(.easeOut(duration: 0.125)) { showContextCue = false }
-                } catch {
-                    // Closing cancels the cue; there is nothing to finish.
                 }
             }
         } else {
@@ -402,7 +373,8 @@ private struct FeedView: View {
                             if let place = selectedLive {
                                 FrostedGlassCard(
                                     palette: palette,
-                                    seed: place.id.unicodeScalars.reduce(17) { $0 &* 31 &+ Int($1.value) },
+                                    seedKey: place.id,
+                                    salt: 17,
                                     rippleTrigger: mapCardRipple,
                                     tapToRipple: true
                                 ) {
@@ -454,6 +426,7 @@ private struct FeedView: View {
                         search.reprioritize(for: interests)
                     },
                     onReset: {
+                        finishedInterestSetup = false
                         activeInterests = []
                         search.reprioritize(for: [])
                     }
@@ -513,7 +486,8 @@ private struct FeedView: View {
                 if !finishedInterestSetup, case .success = profileContainer {
                     FrostedGlassCard(
                         palette: palette,
-                        seed: 4219,
+                        seedKey: "onboarding",
+                        salt: 4219,
                         tapToRipple: true
                     ) {
                         VStack(alignment: .leading, spacing: 10) {
@@ -731,7 +705,8 @@ private struct FeedView: View {
         } label: {
             FrostedGlassCard(
                 palette: palette,
-                seed: place.id.unicodeScalars.reduce(7) { $0 &* 31 &+ Int($1.value) },
+                seedKey: place.id,
+                salt: 7,
                 rippleTrigger: featuredCardRipple
             ) {
                 featuredPlaceContent(
@@ -831,124 +806,114 @@ private struct FeedView: View {
     }
 
     private var placeContext: some View {
-        let mapOpen = railMapSettled || !allowsContextCue
-        let cardOpen = railCardSettled || !allowsContextCue
+        let mapOpen = railMapSettled || !allowsUnfoldMotion
+        let cardOpen = railCardSettled || !allowsUnfoldMotion
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                railMap
-                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey, hold: !mapOpen)
-                    .frame(height: 180)
-                    .overlay(alignment: .trailing) {
-                        hingeCreaseShade(opacity: mapOpen ? 0 : 0.10)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(palette.border, lineWidth: 1)
-                    )
-                    .offset(x: mapOpen ? 0 : 10)
-                    .scaleEffect(x: mapOpen ? 1 : 0.92, y: mapOpen ? 1 : 0.97, anchor: .trailing)
-                    .rotation3DEffect(
-                        .degrees(mapOpen ? 0 : -11),
-                        axis: (x: 0, y: 1, z: 0),
-                        anchor: .trailing,
-                        perspective: 0.42
-                    )
-                    .opacity(mapOpen ? 1 : 0.45)
+                paperUnfold(
+                    open: mapOpen,
+                    tilt: -11,
+                    scaleX: 0.92,
+                    scaleY: 0.97,
+                    minOpacity: 0.45,
+                    creaseOpacity: 0.10,
+                    cornerRadius: 18
+                ) {
+                    railMap
+                        .mapBlurReveal(palette: palette, trigger: railMapRevealKey, hold: !mapOpen)
+                        .frame(height: 180)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(palette.border, lineWidth: 1)
+                        )
+                }
 
-                if let sample = selectedSample {
-                    FrostedGlassCard(
-                        palette: palette,
-                        seed: sample.id.unicodeScalars.reduce(29) { $0 &* 31 &+ Int($1.value) },
-                        rippleTrigger: railContextRipple,
-                        tapToRipple: true
+                if selectedSample != nil || selectedLive != nil {
+                    paperUnfold(
+                        open: cardOpen,
+                        tilt: -13,
+                        scaleX: 0.90,
+                        scaleY: 0.96,
+                        minOpacity: 0.35,
+                        creaseOpacity: 0.12,
+                        cornerRadius: 20
                     ) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            contextTitle(sample.name)
-                            Text("\(sample.category) · \(sample.walkMinutes) min walk")
-                                .font(.subheadline)
-                                .foregroundStyle(palette.muted)
+                        if let sample = selectedSample {
+                            FrostedGlassCard(
+                                palette: palette,
+                                seedKey: sample.id,
+                                salt: 29,
+                                rippleTrigger: railContextRipple,
+                                tapToRipple: true
+                            ) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text(sample.name)
+                                        .font(.headline)
+                                        .foregroundStyle(palette.ink)
+                                    Text("\(sample.category) · \(sample.walkMinutes) min walk")
+                                        .font(.subheadline)
+                                        .foregroundStyle(palette.muted)
 
-                            VStack(spacing: 8) {
-                                contextMetricRow("Walk", value: "\(sample.walkMinutes) min")
-                                Divider().overlay(palette.border)
-                                contextMetricRow(
-                                    "Closes",
-                                    value: sample.closesAt.formatted(date: .omitted, time: .shortened)
-                                )
-                                Divider().overlay(palette.border)
-                                contextMetricRow(
-                                    "Leave by",
-                                    value: sample.leaveBy.formatted(date: .omitted, time: .shortened),
-                                    valueColor: palette.leaveBy
-                                )
-                            }
-                            .padding(.top, 2)
+                                    VStack(spacing: 8) {
+                                        contextMetricRow("Walk", value: "\(sample.walkMinutes) min")
+                                        Divider().overlay(palette.border)
+                                        contextMetricRow(
+                                            "Closes",
+                                            value: sample.closesAt.formatted(date: .omitted, time: .shortened)
+                                        )
+                                        Divider().overlay(palette.border)
+                                        contextMetricRow(
+                                            "Leave by",
+                                            value: sample.leaveBy.formatted(date: .omitted, time: .shortened),
+                                            valueColor: palette.leaveBy
+                                        )
+                                    }
+                                    .padding(.top, 2)
 
-                            Text("Your leave-by time includes the walk and an hour at the venue before it closes.")
-                                .font(.caption)
-                                .foregroundStyle(palette.muted)
+                                    Text("Your leave-by time includes the walk and an hour at the venue before it closes.")
+                                        .font(.caption)
+                                        .foregroundStyle(palette.muted)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        } else if let live = selectedLive {
+                            FrostedGlassCard(
+                                palette: palette,
+                                seedKey: live.id,
+                                salt: 37,
+                                rippleTrigger: railContextRipple,
+                                tapToRipple: true
+                            ) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    if let reason = search.matchReason(for: live, interests: activeInterests) {
+                                        Text(reason)
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(palette.signal)
+                                    }
+                                    Text(live.name)
+                                        .font(.headline)
+                                        .foregroundStyle(palette.ink)
+                                    if !live.address.isEmpty {
+                                        Text(live.address)
+                                            .font(.subheadline)
+                                            .foregroundStyle(palette.muted)
+                                    }
+                                    Button("Open in Maps") {
+                                        openInMaps(name: live.name, coordinate: live.coordinate)
+                                    }
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(palette.onCTA)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(palette.ink, in: Capsule())
+                                    .buttonStyle(.plain)
+                                    .padding(.top, 2)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .overlay(alignment: .trailing) {
-                        hingeCreaseShade(opacity: cardOpen ? 0 : 0.12)
-                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    }
-                    .offset(x: cardOpen ? 0 : 10)
-                    .scaleEffect(x: cardOpen ? 1 : 0.90, y: cardOpen ? 1 : 0.96, anchor: .trailing)
-                    .rotation3DEffect(
-                        .degrees(cardOpen ? 0 : -13),
-                        axis: (x: 0, y: 1, z: 0),
-                        anchor: .trailing,
-                        perspective: 0.42
-                    )
-                    .opacity(cardOpen ? 1 : 0.35)
-                } else if let live = selectedLive {
-                    FrostedGlassCard(
-                        palette: palette,
-                        seed: live.id.unicodeScalars.reduce(37) { $0 &* 31 &+ Int($1.value) },
-                        rippleTrigger: railContextRipple,
-                        tapToRipple: true
-                    ) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            if let reason = search.matchReason(for: live, interests: activeInterests) {
-                                Text(reason)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(palette.signal)
-                            }
-                            contextTitle(live.name)
-                            if !live.address.isEmpty {
-                                Text(live.address)
-                                    .font(.subheadline)
-                                    .foregroundStyle(palette.muted)
-                            }
-                            Button("Open in Maps") {
-                                openInMaps(name: live.name, coordinate: live.coordinate)
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(palette.onCTA)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(palette.ink, in: Capsule())
-                            .buttonStyle(.plain)
-                            .padding(.top, 2)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .overlay(alignment: .trailing) {
-                        hingeCreaseShade(opacity: cardOpen ? 0 : 0.12)
-                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    }
-                    .offset(x: cardOpen ? 0 : 10)
-                    .scaleEffect(x: cardOpen ? 1 : 0.90, y: cardOpen ? 1 : 0.96, anchor: .trailing)
-                    .rotation3DEffect(
-                        .degrees(cardOpen ? 0 : -13),
-                        axis: (x: 0, y: 1, z: 0),
-                        anchor: .trailing,
-                        perspective: 0.42
-                    )
-                    .opacity(cardOpen ? 1 : 0.35)
                 }
             }
             .padding(.horizontal, 12)
@@ -960,15 +925,37 @@ private struct FeedView: View {
         .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
     }
 
-    private func hingeCreaseShade(opacity: Double) -> some View {
-        LinearGradient(
-            colors: [.clear, palette.ink.opacity(opacity)],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-        .frame(width: 44)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+    private func paperUnfold<Content: View>(
+        open: Bool,
+        tilt: Double,
+        scaleX: CGFloat,
+        scaleY: CGFloat,
+        minOpacity: Double,
+        creaseOpacity: Double,
+        cornerRadius: CGFloat,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .overlay(alignment: .trailing) {
+                LinearGradient(
+                    colors: [.clear, palette.ink.opacity(open ? 0 : creaseOpacity)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 44)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .offset(x: open ? 0 : 10)
+            .scaleEffect(x: open ? 1 : scaleX, y: open ? 1 : scaleY, anchor: .trailing)
+            .rotation3DEffect(
+                .degrees(open ? 0 : tilt),
+                axis: (x: 0, y: 1, z: 0),
+                anchor: .trailing,
+                perspective: 0.42
+            )
+            .opacity(open ? 1 : minOpacity)
     }
 
     private var railMap: some View {
@@ -983,7 +970,7 @@ private struct FeedView: View {
                             Image(systemName: "mappin.circle.fill")
                                 .font(isSelected ? .title2 : .body)
                                 .foregroundStyle(.white, isSelected ? palette.signal : palette.ink)
-                                .frame(width: 36, height: 36)
+                                .frame(width: 44, height: 44)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -1037,14 +1024,14 @@ private struct FeedView: View {
     }
 
     private func openInMaps(name: String, coordinate: CLLocationCoordinate2D) {
-        var components = URLComponents(string: "https://maps.apple.com/")
-        components?.queryItems = [
-            URLQueryItem(name: "ll", value: "\(coordinate.latitude),\(coordinate.longitude)"),
-            URLQueryItem(name: "q", value: name),
-        ]
-        if let url = components?.url {
-            openURL(url)
+        let item: MKMapItem
+        if #available(iOS 26, *) {
+            item = MKMapItem(location: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude), address: nil)
+        } else {
+            item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
         }
+        item.name = name
+        item.openInMaps()
     }
 
     private func locate(initial: Bool) async {
@@ -1081,24 +1068,5 @@ private struct FeedView: View {
             return nil
         }
         return nil
-    }
-
-    private func contextTitle(_ name: String) -> some View {
-        Text(name).font(.headline)
-            .overlay(alignment: .leading) {
-                ZStack {
-                    if showContextCue {
-                        Rectangle()
-                            .fill(palette.signal.opacity(0.18))
-                            .frame(width: 2, height: 18)
-                            .colorEffect(ShaderLibrary.contextAccent(.boundingRect))
-                            .offset(x: -6)
-                            .transition(.asymmetric(insertion: .identity, removal: .opacity))
-                    }
-                }
-                .opacity(hingeOpen && allowsContextCue ? 1 : 0)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
     }
 }

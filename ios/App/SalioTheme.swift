@@ -1,5 +1,22 @@
 import SwiftUI
 
+enum SalioTestStore {
+    static var name: String? {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["SALIO_PROFILE_TEST_STORE"]
+        #else
+        nil
+        #endif
+    }
+
+    static func scopedKey(_ base: String) -> String {
+        if let name {
+            return "\(base).\(name)"
+        }
+        return base
+    }
+}
+
 enum SalioAppearance: String, CaseIterable, Identifiable, Sendable {
     case mistGlass
     case stoneAmber
@@ -14,12 +31,7 @@ enum SalioAppearance: String, CaseIterable, Identifiable, Sendable {
     }
 
     static var storageKey: String {
-        #if DEBUG
-        if let store = ProcessInfo.processInfo.environment["SALIO_PROFILE_TEST_STORE"] {
-            return "salioAppearance.\(store)"
-        }
-        #endif
-        return "salioAppearance"
+        SalioTestStore.scopedKey("salioAppearance")
     }
 
     func palette(for colorScheme: ColorScheme) -> SalioPalette {
@@ -35,12 +47,10 @@ enum SalioAppearance: String, CaseIterable, Identifiable, Sendable {
                 muted: Color(hex: 0x9CA2B3),
                 signal: Color(hex: 0xB7AEDD),
                 leaveBy: Color(hex: 0x4CC38A),
-                causticWarm: Color(hex: 0xE89F6E),
-                causticCool: Color(hex: 0x9586E0),
+                causticWarm: Color(hex: 0xE89F6E, opacity: 0.16),
+                causticCool: Color(hex: 0x9586E0, opacity: 0.14),
                 reticlePrimary: Color.white.opacity(0.22),
-                reticleSecondary: Color.white.opacity(0.11),
-                causticWarmOpacity: 0.16,
-                causticCoolOpacity: 0.14
+                reticleSecondary: Color.white.opacity(0.11)
             )
         case (.mistGlass, _):
             SalioPalette(
@@ -53,12 +63,10 @@ enum SalioAppearance: String, CaseIterable, Identifiable, Sendable {
                 muted: Color(hex: 0x5A5F6C),
                 signal: Color(hex: 0x6A5BB3),
                 leaveBy: Color(hex: 0x1D8150),
-                causticWarm: Color(hex: 0xF0A670),
-                causticCool: Color(hex: 0x7666C6),
-                reticlePrimary: Color(hex: 0x0D0F14).opacity(0.24),
-                reticleSecondary: Color(hex: 0x0D0F14).opacity(0.12),
-                causticWarmOpacity: 0.22,
-                causticCoolOpacity: 0.14
+                causticWarm: Color(hex: 0xF0A670, opacity: 0.22),
+                causticCool: Color(hex: 0x7666C6, opacity: 0.14),
+                reticlePrimary: Color(hex: 0x0D0F14, opacity: 0.24),
+                reticleSecondary: Color(hex: 0x0D0F14, opacity: 0.12)
             )
         case (.stoneAmber, .dark):
             SalioPalette(
@@ -71,12 +79,10 @@ enum SalioAppearance: String, CaseIterable, Identifiable, Sendable {
                 muted: Color(hex: 0xA0A5A0),
                 signal: Color(hex: 0xE69B42),
                 leaveBy: Color(hex: 0x4CC38A),
-                causticWarm: Color(hex: 0xDF9A44),
-                causticCool: Color(hex: 0x988AD8),
+                causticWarm: Color(hex: 0xDF9A44, opacity: 0.16),
+                causticCool: Color(hex: 0x988AD8, opacity: 0.11),
                 reticlePrimary: Color.white.opacity(0.22),
-                reticleSecondary: Color.white.opacity(0.11),
-                causticWarmOpacity: 0.16,
-                causticCoolOpacity: 0.11
+                reticleSecondary: Color.white.opacity(0.11)
             )
         case (.stoneAmber, _):
             SalioPalette(
@@ -89,12 +95,10 @@ enum SalioAppearance: String, CaseIterable, Identifiable, Sendable {
                 muted: Color(hex: 0x5C605D),
                 signal: Color(hex: 0xC87316),
                 leaveBy: Color(hex: 0x1D8150),
-                causticWarm: Color(hex: 0xE8A54C),
-                causticCool: Color(hex: 0x8272CC),
-                reticlePrimary: Color(hex: 0x101211).opacity(0.24),
-                reticleSecondary: Color(hex: 0x101211).opacity(0.12),
-                causticWarmOpacity: 0.22,
-                causticCoolOpacity: 0.11
+                causticWarm: Color(hex: 0xE8A54C, opacity: 0.22),
+                causticCool: Color(hex: 0x8272CC, opacity: 0.11),
+                reticlePrimary: Color(hex: 0x101211, opacity: 0.24),
+                reticleSecondary: Color(hex: 0x101211, opacity: 0.12)
             )
         }
     }
@@ -114,8 +118,6 @@ struct SalioPalette: Equatable {
     let causticCool: Color
     let reticlePrimary: Color
     let reticleSecondary: Color
-    let causticWarmOpacity: Double
-    let causticCoolOpacity: Double
 }
 
 extension Color {
@@ -205,7 +207,7 @@ struct RefractedReticleSurface: View {
             context.fill(
                 Path(CGRect(origin: .zero, size: size)),
                 with: .radialGradient(
-                    Gradient(colors: [palette.causticWarm.opacity(palette.causticWarmOpacity), .clear]),
+                    Gradient(colors: [palette.causticWarm, .clear]),
                     center: warmCenter,
                     startRadius: 6,
                     endRadius: warmRadius
@@ -217,66 +219,69 @@ struct RefractedReticleSurface: View {
             context.fill(
                 Path(CGRect(origin: .zero, size: size)),
                 with: .radialGradient(
-                    Gradient(colors: [palette.causticCool.opacity(palette.causticCoolOpacity), .clear]),
+                    Gradient(colors: [palette.causticCool, .clear]),
                     center: coolCenter,
                     startRadius: 6,
                     endRadius: coolRadius
                 )
             )
 
-            let stepX: CGFloat = 19
-            let stepY: CGFloat = 17
-            let cols = Int(size.width / stepX) + 1
-            let rows = Int(size.height / stepY) + 1
-            let plus = context.resolve(
-                Text("+").font(.system(size: 9, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.reticlePrimary)
+            let glyphs: [(Int, GraphicsContext.ResolvedText)] = [
+                (74, context.resolve(Text("·").font(.system(size: 10, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticleSecondary))),
+                (87, context.resolve(Text(".").font(.system(size: 9, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticleSecondary))),
+                (95, context.resolve(Text("+").font(.system(size: 9, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticlePrimary))),
+                (98, context.resolve(Text(":").font(.system(size: 8.5, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticleSecondary))),
+                (100, context.resolve(Text("/").font(.system(size: 8.5, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticlePrimary.opacity(0.65)))),
+            ]
+            Self.drawAsciiScatter(
+                in: &context,
+                size: size,
+                seed: seed,
+                step: CGSize(width: 19, height: 17),
+                emptyPercent: 44,
+                glyphs: glyphs
             )
-            let dot = context.resolve(
-                Text("·").font(.system(size: 10, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.reticleSecondary)
-            )
-            let period = context.resolve(
-                Text(".").font(.system(size: 9, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.reticleSecondary)
-            )
-            let colon = context.resolve(
-                Text(":").font(.system(size: 8.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.reticleSecondary)
-            )
-            let slash = context.resolve(
-                Text("/").font(.system(size: 8.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.reticlePrimary.opacity(0.65))
-            )
+        }
+    }
 
-            for row in 0..<rows {
-                for col in 0..<cols {
-                    let h = Self.cellHash(row: row, col: col, seed: seed)
-                    let bucket = Int(h % 100)
-                    guard bucket >= 44 else { continue }
+    static func drawAsciiScatter(
+        in context: inout GraphicsContext,
+        size: CGSize,
+        seed: Int,
+        step: CGSize,
+        emptyPercent: Int,
+        glyphs: [(Int, GraphicsContext.ResolvedText)]
+    ) {
+        let cols = Int(size.width / step.width) + 1
+        let rows = Int(size.height / step.height) + 1
+        let halfX = step.width * 0.52
+        let halfY = step.height * 0.52
 
-                    let jitterX = CGFloat(Int((h >> 8) % 9) - 4) * 0.85
-                    let jitterY = CGFloat(Int((h >> 12) % 9) - 4) * 0.85
-                    let point = CGPoint(
-                        x: CGFloat(col) * stepX + 10 + jitterX,
-                        y: CGFloat(row) * stepY + 9 + jitterY
-                    )
+        for row in 0..<rows {
+            for col in 0..<cols {
+                let h = cellHash(row: row, col: col, seed: seed)
+                let bucket = Int(h % 100)
+                guard bucket >= emptyPercent else { continue }
 
-                    let glyph: GraphicsContext.ResolvedText
-                    switch bucket {
-                    case 44..<74: glyph = dot
-                    case 74..<87: glyph = period
-                    case 87..<95: glyph = plus
-                    case 95..<98: glyph = colon
-                    default: glyph = slash
-                    }
+                let jitterX = CGFloat(Int((h >> 8) % 9) - 4) * 0.85
+                let jitterY = CGFloat(Int((h >> 12) % 9) - 4) * 0.85
+                let point = CGPoint(
+                    x: CGFloat(col) * step.width + halfX + jitterX,
+                    y: CGFloat(row) * step.height + halfY + jitterY
+                )
+
+                if let glyph = glyphs.first(where: { bucket < $0.0 })?.1 {
                     context.draw(glyph, at: point, anchor: .center)
                 }
             }
         }
     }
 
-    static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
+    static func seed(for key: String, salt: Int = 0) -> Int {
+        key.unicodeScalars.reduce(salt) { $0 &* 31 &+ Int($1.value) }
+    }
+
+    private static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
         var h = UInt64(bitPattern: Int64(row &* 73_856_093 ^ col &* 19_349_663 ^ seed &* 83_492_791))
         h ^= h >> 30
         h &*= 0xBF58_476D_1CE4_E5B9
@@ -288,10 +293,25 @@ struct RefractedReticleSurface: View {
 
 struct FrostedGlassCard<Content: View>: View {
     let palette: SalioPalette
-    var seed: Int = 0
+    let seed: Int
     var rippleTrigger: Int = 0
     var tapToRipple: Bool = false
     @ViewBuilder let content: () -> Content
+
+    init(
+        palette: SalioPalette,
+        seedKey: String,
+        salt: Int = 0,
+        rippleTrigger: Int = 0,
+        tapToRipple: Bool = false,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.palette = palette
+        self.seed = RefractedReticleSurface.seed(for: seedKey, salt: salt)
+        self.rippleTrigger = rippleTrigger
+        self.tapToRipple = tapToRipple
+        self.content = content
+    }
 
     @State private var rippleStart: Date?
     @State private var rippleOrigin = UnitPoint(x: 0.55, y: 0.48)
@@ -339,6 +359,11 @@ struct FrostedGlassCard<Content: View>: View {
 }
 
 struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
+    private struct TaskKey: Equatable {
+        let trigger: Trigger
+        let hold: Bool
+    }
+
     let palette: SalioPalette
     let trigger: Trigger
     let hold: Bool
@@ -377,7 +402,7 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
                     }
                 }
         }
-        .task(id: trigger) {
+        .task(id: TaskKey(trigger: trigger, hold: hold)) {
             guard allowsReveal, !hold else {
                 isRevealing = false
                 revealStart = nil
@@ -408,50 +433,20 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
                 with: .color(palette.card.opacity(0.62))
             )
 
-            let stepX: CGFloat = 17
-            let stepY: CGFloat = 15
-            let cols = Int(size.width / stepX) + 1
-            let rows = Int(size.height / stepY) + 1
-            let plus = context.resolve(
-                Text("+").font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(palette.signal.opacity(0.72))
+            let glyphs: [(Int, GraphicsContext.ResolvedText)] = [
+                (72, context.resolve(Text("·").font(.system(size: 10.5, weight: .regular, design: .monospaced)).foregroundStyle(palette.ink.opacity(0.36)))),
+                (86, context.resolve(Text(":").font(.system(size: 9, weight: .regular, design: .monospaced)).foregroundStyle(palette.ink.opacity(0.30)))),
+                (95, context.resolve(Text("+").font(.system(size: 10, weight: .semibold, design: .monospaced)).foregroundStyle(palette.signal.opacity(0.72)))),
+                (100, context.resolve(Text("/").font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(palette.ink.opacity(0.34)))),
+            ]
+            RefractedReticleSurface.drawAsciiScatter(
+                in: &context,
+                size: size,
+                seed: seed,
+                step: CGSize(width: 17, height: 15),
+                emptyPercent: 42,
+                glyphs: glyphs
             )
-            let dot = context.resolve(
-                Text("·").font(.system(size: 10.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.ink.opacity(0.36))
-            )
-            let colon = context.resolve(
-                Text(":").font(.system(size: 9, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.ink.opacity(0.30))
-            )
-            let slash = context.resolve(
-                Text("/").font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundStyle(palette.ink.opacity(0.34))
-            )
-
-            for row in 0..<rows {
-                for col in 0..<cols {
-                    let h = RefractedReticleSurface.cellHash(row: row, col: col, seed: seed)
-                    let bucket = Int(h % 100)
-                    guard bucket >= 42 else { continue }
-
-                    let jitterX = CGFloat(Int((h >> 8) % 7) - 3) * 0.9
-                    let jitterY = CGFloat(Int((h >> 12) % 7) - 3) * 0.9
-                    let point = CGPoint(
-                        x: CGFloat(col) * stepX + 9 + jitterX,
-                        y: CGFloat(row) * stepY + 8 + jitterY
-                    )
-
-                    let glyph: GraphicsContext.ResolvedText
-                    switch bucket {
-                    case 42..<72: glyph = dot
-                    case 72..<86: glyph = colon
-                    case 86..<95: glyph = plus
-                    default: glyph = slash
-                    }
-                    context.draw(glyph, at: point, anchor: .center)
-                }
-            }
         }
     }
 }
