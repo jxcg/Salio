@@ -188,6 +188,7 @@ final class SalioUITests: XCTestCase {
         app.alerts.buttons["Reset"].tap()
         app.buttons["Cancel"].tap()
         XCTAssertTrue(app.staticTexts["Matches Film"].waitForNonExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Choose interests"].waitForExistence(timeout: 2))
         XCTAssertLessThan(cafe.frame.midY, cinema.frame.midY)
         XCTAssertEqual(searchCount(in: app), 1)
 

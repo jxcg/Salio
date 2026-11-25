@@ -15,11 +15,9 @@ struct SalioApp: App {
     }
 
     private static var profileStore: ModelConfiguration {
-        #if DEBUG
-        if let name = ProcessInfo.processInfo.environment["SALIO_PROFILE_TEST_STORE"] {
+        if let name = SalioTestStore.name {
             return ModelConfiguration(name, cloudKitDatabase: .none)
         }
-        #endif
         return ModelConfiguration(cloudKitDatabase: .none)
     }
 }
@@ -31,17 +29,25 @@ struct FeedEntry: Identifiable {
     let walkMinutes: Int
     let closesAt: Date
     let leaveBy: Date
+    let latitude: Double
+    let longitude: Double
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
 
     static let samples: [FeedEntry] = {
         let demoStart = Date(timeIntervalSince1970: 1_893_520_800) // 2030-01-01 18:00 UTC
         return [
             FeedEntry(
                 id: "cinema", name: "The Picture House", category: "Cinema", walkMinutes: 8,
-                closesAt: demoStart.addingTimeInterval(79 * 60), leaveBy: demoStart.addingTimeInterval(11 * 60)
+                closesAt: demoStart.addingTimeInterval(79 * 60), leaveBy: demoStart.addingTimeInterval(11 * 60),
+                latitude: 51.5136, longitude: -0.1365
             ),
             FeedEntry(
                 id: "gallery", name: "North Street Gallery", category: "Art", walkMinutes: 14,
-                closesAt: demoStart.addingTimeInterval(154 * 60), leaveBy: demoStart.addingTimeInterval(80 * 60)
+                closesAt: demoStart.addingTimeInterval(154 * 60), leaveBy: demoStart.addingTimeInterval(80 * 60),
+                latitude: 51.5150, longitude: -0.1318
             ),
         ]
     }()
@@ -249,40 +255,37 @@ private struct FeedView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
     @State private var wasClosed = false
-    @State private var hingeOpen = false
-    @State private var showContextCue = false
     @State private var profileSheet: ProfileSheet?
-    @AppStorage(Self.interestSetupKey) private var finishedInterestSetup = false
+    @AppStorage(SalioTestStore.scopedKey("finishedInterestSetup")) private var finishedInterestSetup = false
     @State private var activeInterests: [String] = []
     @State private var center: CLLocationCoordinate2D?
     @State private var locating = false
     @State private var didLocate = false
     @State private var showMap = false
     @State private var camera: MapCameraPosition = .automatic
-    @State private var rippleStart: Date?
-    @State private var rippleOrigin = UnitPoint(x: 0.62, y: 0.42)
+    @State private var railCamera: MapCameraPosition = .automatic
+    @State private var featuredCardRipple = 0
+    @State private var mapCardRipple = 0
+    @State private var railContextRipple = 0
+    @State private var unfoldCount = 0
+    @State private var railMapSettled = true
+    @State private var railCardSettled = true
+    @State private var compactFeedWidth: CGFloat?
 
     private var palette: SalioPalette {
         appearance.palette(for: colorScheme)
     }
 
-    private func triggerRipple(at origin: UnitPoint = UnitPoint(x: 0.62, y: 0.42)) {
-        rippleOrigin = origin
-        rippleStart = Date()
-    }
-
-    private static var interestSetupKey: String {
-        #if DEBUG
-        if let store = ProcessInfo.processInfo.environment["SALIO_PROFILE_TEST_STORE"] {
-            return "finishedInterestSetup.\(store)"
-        }
-        #endif
-        return "finishedInterestSetup"
+    private var railMapRevealKey: String {
+        if let live = selectedLive { return "live-\(live.id)" }
+        if let sample = selectedSample { return "sample-\(sample.id)" }
+        return "initial"
     }
 
     private var selectedSample: FeedEntry? {
@@ -297,7 +300,7 @@ private struct FeedView: View {
         return search.results.first { $0.id == id }
     }
 
-    private var allowsContextCue: Bool {
+    private var allowsUnfoldMotion: Bool {
         !reduceMotion && !voiceOver && contrast != .increased
     }
 
@@ -308,21 +311,45 @@ private struct FeedView: View {
             splitView.onHingeChange { old, new in
                 let status = new.hinge?.status
                 guard old.hinge?.status != status else { return }
-                hingeOpen = status == .fullyOpen
-                showContextCue = hingeOpen && wasClosed && allowsContextCue
+                let didUnfold = status == .fullyOpen && wasClosed && allowsUnfoldMotion
                 if status == .closed {
                     wasClosed = true
+                    if allowsUnfoldMotion {
+                        railMapSettled = false
+                        railCardSettled = false
+                    }
+                } else if didUnfold {
+                    railMapSettled = false
+                    railCardSettled = false
+                    unfoldCount += 1
+                    wasClosed = false
                 } else if status == .fullyOpen || status == nil {
                     wasClosed = false
+                    railMapSettled = true
+                    railCardSettled = true
                 }
             }
-            .task(id: showContextCue) {
-                guard showContextCue else { return }
+            .task(id: unfoldCount) {
+                guard unfoldCount > 0, allowsUnfoldMotion else {
+                    railMapSettled = true
+                    railCardSettled = true
+                    return
+                }
                 do {
-                    try await Task.sleep(for: .milliseconds(25))
-                    withAnimation(.easeOut(duration: 0.125)) { showContextCue = false }
+                    // Let the inner Duo display reach full brightness before unfolding the rail.
+                    try await Task.sleep(for: .milliseconds(180))
+                    withAnimation(.spring(response: 0.52, dampingFraction: 0.72)) {
+                        railMapSettled = true
+                    }
+                    try await Task.sleep(for: .milliseconds(110))
+                    withAnimation(.spring(response: 0.58, dampingFraction: 0.70)) {
+                        railCardSettled = true
+                    }
+                    try await Task.sleep(for: .milliseconds(110))
+                    railContextRipple += 1
                 } catch {
-                    // Closing cancels the cue; there is nothing to finish.
+                    railMapSettled = true
+                    railCardSettled = true
                 }
             }
         } else {
@@ -336,17 +363,20 @@ private struct FeedView: View {
     private var splitView: some View {
         NavigationSplitView(preferredCompactColumn: $compactColumn) {
             placeContext
+                .navigationSplitViewColumnWidth(min: 270, ideal: 310, max: 340)
         } detail: {
             Group {
                 if showMap, search.status == .results {
                     placesMap
+                        .mapBlurReveal(palette: palette, trigger: showMap)
                         .safeAreaInset(edge: .bottom) {
                             if let place = selectedLive {
                                 FrostedGlassCard(
                                     palette: palette,
-                                    rippleStart: rippleStart,
-                                    rippleOrigin: rippleOrigin,
-                                    seed: place.id.unicodeScalars.reduce(17) { $0 &* 31 &+ Int($1.value) }
+                                    seedKey: place.id,
+                                    salt: 17,
+                                    rippleTrigger: mapCardRipple,
+                                    tapToRipple: true
                                 ) {
                                     featuredPlaceContent(
                                         title: place.name,
@@ -368,7 +398,6 @@ private struct FeedView: View {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if !showMap, center != nil {
                         Button("Refresh nearby", systemImage: "arrow.clockwise") {
-                            triggerRipple()
                             Task { await locate(initial: false) }
                         }
                         .disabled(locating || search.status == .searching)
@@ -377,7 +406,6 @@ private struct FeedView: View {
                     if search.status == .results {
                         Button(showMap ? "Show list" : "Show map", systemImage: showMap ? "list.bullet" : "map") {
                             showMap.toggle()
-                            triggerRipple()
                         }
                         .accessibilityIdentifier(showMap ? "show-list" : "show-map")
                     }
@@ -396,25 +424,27 @@ private struct FeedView: View {
                         finishedInterestSetup = true
                         activeInterests = interests
                         search.reprioritize(for: interests)
-                        triggerRipple(at: UnitPoint(x: 0.50, y: 0.44))
                     },
                     onReset: {
+                        finishedInterestSetup = false
                         activeInterests = []
                         search.reprioritize(for: [])
-                        triggerRipple(at: UnitPoint(x: 0.50, y: 0.44))
                     }
                 )
                 .modelContainer(container)
             case .failure: ContentUnavailableView("Profile unavailable", systemImage: "person.crop.circle")
             }
         }
-        .task { await locate(initial: true) }
+        .task {
+            syncRailCamera()
+            await locate(initial: true)
+        }
         .onChange(of: search.results) {
             camera = .automatic
-            triggerRipple()
+            syncRailCamera()
         }
-        .onChange(of: appearance) {
-            triggerRipple()
+        .onChange(of: selection) {
+            syncRailCamera()
         }
     }
 
@@ -434,7 +464,6 @@ private struct FeedView: View {
                     .foregroundStyle(palette.ink)
                     .submitLabel(.search)
                     .onSubmit {
-                        triggerRipple()
                         Task { await search.submit(near: center) }
                     }
                     .disabled(search.status == .searching)
@@ -457,9 +486,9 @@ private struct FeedView: View {
                 if !finishedInterestSetup, case .success = profileContainer {
                     FrostedGlassCard(
                         palette: palette,
-                        rippleStart: rippleStart,
-                        rippleOrigin: rippleOrigin,
-                        seed: 4219
+                        seedKey: "onboarding",
+                        salt: 4219,
+                        tapToRipple: true
                     ) {
                         VStack(alignment: .leading, spacing: 10) {
                             VStack(alignment: .leading, spacing: 3) {
@@ -472,7 +501,6 @@ private struct FeedView: View {
                             }
                             HStack(spacing: 8) {
                                 Button("Choose interests") {
-                                    triggerRipple(at: UnitPoint(x: 0.30, y: 0.72))
                                     profileSheet = .onboarding
                                 }
                                 .font(.subheadline.weight(.semibold))
@@ -525,6 +553,15 @@ private struct FeedView: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 20)
+            .frame(maxWidth: horizontalSizeClass == .regular ? (compactFeedWidth ?? 382) : .infinity)
+            .frame(maxWidth: .infinity)
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            if horizontalSizeClass == .compact, width > 0 {
+                compactFeedWidth = width
+            }
         }
         .background(palette.ground.ignoresSafeArea())
     }
@@ -537,7 +574,7 @@ private struct FeedView: View {
                 Annotation(place.name, coordinate: place.coordinate) {
                     Button {
                         selection = .live(place.id)
-                        triggerRipple(at: UnitPoint(x: 0.50, y: 0.45))
+                        mapCardRipple += 1
                     } label: {
                         Image(systemName: "mappin.circle.fill")
                             .font(.title2)
@@ -648,7 +685,6 @@ private struct FeedView: View {
         let selected = selectedSample?.id == entry.id
         return Button {
             selection = .sample(entry.id)
-            triggerRipple()
         } label: {
             rowLabel(
                 title: entry.name,
@@ -665,13 +701,13 @@ private struct FeedView: View {
         let selected = selection == .live(place.id)
         return Button {
             selection = .live(place.id)
-            triggerRipple(at: UnitPoint(x: 0.55, y: 0.48))
+            featuredCardRipple += 1
         } label: {
             FrostedGlassCard(
                 palette: palette,
-                rippleStart: rippleStart,
-                rippleOrigin: rippleOrigin,
-                seed: place.id.unicodeScalars.reduce(7) { $0 &* 31 &+ Int($1.value) }
+                seedKey: place.id,
+                salt: 7,
+                rippleTrigger: featuredCardRipple
             ) {
                 featuredPlaceContent(
                     title: place.name,
@@ -719,7 +755,6 @@ private struct FeedView: View {
         let selected = selection == .live(place.id)
         return Button {
             selection = .live(place.id)
-            triggerRipple()
         } label: {
             rowLabel(
                 title: place.name,
@@ -770,33 +805,233 @@ private struct FeedView: View {
         .contentShape(Rectangle())
     }
 
-    @ViewBuilder
     private var placeContext: some View {
-        List {
-            if let sample = selectedSample {
-                Section {
-                    contextTitle(sample.name)
-                    LabeledContent("Walk", value: "\(sample.walkMinutes) min")
-                    LabeledContent("Closes", value: sample.closesAt.formatted(date: .omitted, time: .shortened))
-                } footer: {
-                    Text("Your leave-by time includes the walk and an hour at the venue before it closes.")
+        let mapOpen = railMapSettled || !allowsUnfoldMotion
+        let cardOpen = railCardSettled || !allowsUnfoldMotion
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                paperUnfold(
+                    open: mapOpen,
+                    tilt: -11,
+                    scaleX: 0.92,
+                    scaleY: 0.97,
+                    minOpacity: 0.45,
+                    creaseOpacity: 0.10,
+                    cornerRadius: 18
+                ) {
+                    railMap
+                        .mapBlurReveal(palette: palette, trigger: railMapRevealKey, hold: !mapOpen)
+                        .frame(height: 180)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(palette.border, lineWidth: 1)
+                        )
                 }
-                .listRowBackground(palette.card)
-            } else if let live = selectedLive {
-                Section {
-                    contextTitle(live.name)
-                    LabeledContent("Address", value: live.address)
-                    if let reason = search.matchReason(for: live, interests: activeInterests) {
-                        LabeledContent("Why it’s here", value: reason)
+
+                if selectedSample != nil || selectedLive != nil {
+                    paperUnfold(
+                        open: cardOpen,
+                        tilt: -13,
+                        scaleX: 0.90,
+                        scaleY: 0.96,
+                        minOpacity: 0.35,
+                        creaseOpacity: 0.12,
+                        cornerRadius: 20
+                    ) {
+                        if let sample = selectedSample {
+                            FrostedGlassCard(
+                                palette: palette,
+                                seedKey: sample.id,
+                                salt: 29,
+                                rippleTrigger: railContextRipple,
+                                tapToRipple: true
+                            ) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text(sample.name)
+                                        .font(.headline)
+                                        .foregroundStyle(palette.ink)
+                                    Text("\(sample.category) · \(sample.walkMinutes) min walk")
+                                        .font(.subheadline)
+                                        .foregroundStyle(palette.muted)
+
+                                    VStack(spacing: 8) {
+                                        contextMetricRow("Walk", value: "\(sample.walkMinutes) min")
+                                        Divider().overlay(palette.border)
+                                        contextMetricRow(
+                                            "Closes",
+                                            value: sample.closesAt.formatted(date: .omitted, time: .shortened)
+                                        )
+                                        Divider().overlay(palette.border)
+                                        contextMetricRow(
+                                            "Leave by",
+                                            value: sample.leaveBy.formatted(date: .omitted, time: .shortened),
+                                            valueColor: palette.leaveBy
+                                        )
+                                    }
+                                    .padding(.top, 2)
+
+                                    Text("Your leave-by time includes the walk and an hour at the venue before it closes.")
+                                        .font(.caption)
+                                        .foregroundStyle(palette.muted)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        } else if let live = selectedLive {
+                            FrostedGlassCard(
+                                palette: palette,
+                                seedKey: live.id,
+                                salt: 37,
+                                rippleTrigger: railContextRipple,
+                                tapToRipple: true
+                            ) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    if let reason = search.matchReason(for: live, interests: activeInterests) {
+                                        Text(reason)
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(palette.signal)
+                                    }
+                                    Text(live.name)
+                                        .font(.headline)
+                                        .foregroundStyle(palette.ink)
+                                    if !live.address.isEmpty {
+                                        Text(live.address)
+                                            .font(.subheadline)
+                                            .foregroundStyle(palette.muted)
+                                    }
+                                    Button("Open in Maps") {
+                                        openInMaps(name: live.name, coordinate: live.coordinate)
+                                    }
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(palette.onCTA)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(palette.ink, in: Capsule())
+                                    .buttonStyle(.plain)
+                                    .padding(.top, 2)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
                     }
                 }
-                .listRowBackground(palette.card)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 20)
+        }
+        .scrollClipDisabled()
+        .background(palette.ground.ignoresSafeArea())
+        .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
+    }
+
+    private func paperUnfold<Content: View>(
+        open: Bool,
+        tilt: Double,
+        scaleX: CGFloat,
+        scaleY: CGFloat,
+        minOpacity: Double,
+        creaseOpacity: Double,
+        cornerRadius: CGFloat,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .overlay(alignment: .trailing) {
+                LinearGradient(
+                    colors: [.clear, palette.ink.opacity(open ? 0 : creaseOpacity)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 44)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .offset(x: open ? 0 : 10)
+            .scaleEffect(x: open ? 1 : scaleX, y: open ? 1 : scaleY, anchor: .trailing)
+            .rotation3DEffect(
+                .degrees(open ? 0 : tilt),
+                axis: (x: 0, y: 1, z: 0),
+                anchor: .trailing,
+                perspective: 0.42
+            )
+            .opacity(open ? 1 : minOpacity)
+    }
+
+    private var railMap: some View {
+        Map(position: $railCamera) {
+            if let live = selectedLive {
+                ForEach(search.results) { place in
+                    let isSelected = place.id == live.id
+                    Annotation(place.name, coordinate: place.coordinate) {
+                        Button {
+                            selection = .live(place.id)
+                        } label: {
+                            Image(systemName: "mappin.circle.fill")
+                                .font(isSelected ? .title2 : .body)
+                                .foregroundStyle(.white, isSelected ? palette.signal : palette.ink)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(place.name)
+                        .accessibilityIdentifier("rail-pin-\(place.id)")
+                    }
+                    .annotationTitles(.hidden)
+                }
+            } else if let sample = selectedSample {
+                Annotation(sample.name, coordinate: sample.coordinate) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.white, palette.signal)
+                        .accessibilityHidden(true)
+                }
+                .annotationTitles(.hidden)
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(palette.ground)
-        .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
+        .mapStyle(.standard(pointsOfInterest: .excludingAll))
+    }
+
+    private func contextMetricRow(_ label: String, value: String, valueColor: Color? = nil) -> some View {
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(palette.muted)
+            Spacer()
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(valueColor ?? palette.ink)
+        }
+    }
+
+    private func syncRailCamera() {
+        let target: CLLocationCoordinate2D?
+        if let live = selectedLive {
+            target = live.coordinate
+        } else if let sample = selectedSample {
+            target = sample.coordinate
+        } else {
+            target = search.results.first?.coordinate
+        }
+        guard let target else {
+            railCamera = .automatic
+            return
+        }
+        railCamera = .region(
+            MKCoordinateRegion(center: target, latitudinalMeters: 750, longitudinalMeters: 750)
+        )
+    }
+
+    private func openInMaps(name: String, coordinate: CLLocationCoordinate2D) {
+        let item: MKMapItem
+        if #available(iOS 26, *) {
+            item = MKMapItem(location: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude), address: nil)
+        } else {
+            item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
+        }
+        item.name = name
+        item.openInMaps()
     }
 
     private func locate(initial: Bool) async {
@@ -833,24 +1068,5 @@ private struct FeedView: View {
             return nil
         }
         return nil
-    }
-
-    private func contextTitle(_ name: String) -> some View {
-        Text(name).font(.headline)
-            .overlay(alignment: .leading) {
-                ZStack {
-                    if showContextCue {
-                        Rectangle()
-                            .fill(palette.signal.opacity(0.18))
-                            .frame(width: 2, height: 18)
-                            .colorEffect(ShaderLibrary.contextAccent(.boundingRect))
-                            .offset(x: -6)
-                            .transition(.asymmetric(insertion: .identity, removal: .opacity))
-                    }
-                }
-                .opacity(hingeOpen && allowsContextCue ? 1 : 0)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
     }
 }

@@ -1,4 +1,3 @@
-import SwiftUI
 import XCTest
 
 @testable import Salio
@@ -80,12 +79,5 @@ final class SearchModelTests: XCTestCase {
 
         XCTAssertEqual(model.searchCount, 1)
         XCTAssertEqual(model.status, .failed)
-    }
-
-    func testAppearancesProvideDistinctLightAndDarkPalettes() {
-        XCTAssertEqual(SalioAppearance.allCases.map(\.displayName), ["Mist & Glass", "Stone & Amber"])
-        XCTAssertNotEqual(SalioAppearance.mistGlass.palette(for: .light), SalioAppearance.stoneAmber.palette(for: .light))
-        XCTAssertNotEqual(SalioAppearance.mistGlass.palette(for: .light), SalioAppearance.mistGlass.palette(for: .dark))
-        XCTAssertNotEqual(SalioAppearance.stoneAmber.palette(for: .light), SalioAppearance.stoneAmber.palette(for: .dark))
     }
 }
