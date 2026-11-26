@@ -582,8 +582,9 @@ struct IndexMarker: View {
 
 /// Salio's first moment on a cold launch: once the app is active, an `AsciiReveal` in a random shape and
 /// colour mix bursts the launch screen open onto the feed, riding one refraction wave, with no fade.
-/// If the feed is ready, it plays straight through; while Nearby is still loading, the ring holds near the
-/// centre and breathes, then tears open as soon as the feed is ready, after `maxWait`, or on a tap.
+/// It only tears through to the feed once the feed's first load is final, so it never shows data that is
+/// about to change. While Nearby is still loading, the ring breathes on the closed sheet; if the load is
+/// done in time it tears open, and after `maxWait` or a tap it bursts across the closed sheet and fades.
 /// Its colours follow light and dark but not the theme, because the launch screen before it can't know
 /// the theme. Under Reduce Motion, VoiceOver or Increase Contrast, the launch colour simply fades.
 struct SalioOpening: View {
@@ -599,7 +600,9 @@ struct SalioOpening: View {
     /// Set once the app is active, after iOS's launch zoom, so the reveal plays where it can be seen.
     @State private var start: Date?
     /// When the ring was released: the feed became ready, `maxWait` passed, or someone tapped.
-    @State private var readyAt: Date?
+    @State private var releasedAt: Date?
+    /// Whether the release tears open onto the feed, which only happens once the feed is ready.
+    @State private var tears = false
     @State private var fading = false
     /// Shape and colours are picked once per launch, independently of each other.
     @State private var shape = AsciiReveal.Shape.allCases.randomElement() ?? .starburst
@@ -632,7 +635,8 @@ struct SalioOpening: View {
                     cover: Color("LaunchBackground"),
                     dots: Color(hex: dark ? 0x2A2C38 : 0xD6D8E2),
                     core: Color(hex: dark ? 0xE4E6FF : 0x2E2A78),
-                    accents: accents.map { Color(hex: dark ? $0.dark : $0.light) }
+                    accents: accents.map { Color(hex: dark ? $0.dark : $0.light) },
+                    opens: tears
                 )
                 .visualEffect { content, proxy in
                     let reach = hypot(proxy.size.width, proxy.size.height)
@@ -656,31 +660,36 @@ struct SalioOpening: View {
         .opacity(fading ? 0 : 1)
         // While the ring waits, a tap releases it instead of reaching the feed hidden underneath.
         .contentShape(.rect)
-        .onTapGesture { readyAt = readyAt ?? .now }
-        .allowsHitTesting(animates && readyAt == nil)
+        .onTapGesture { releasedAt = releasedAt ?? .now }
+        .allowsHitTesting(animates && releasedAt == nil)
         .accessibilityHidden(true)
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active, start == nil { start = .now }
         }
         .onChange(of: ready, initial: true) {
-            if ready, readyAt == nil { readyAt = .now }
+            guard ready, releasedAt == nil else { return }
+            tears = true
+            releasedAt = .now
         }
-        .task(id: [start, readyAt]) {
+        .task(id: [start, releasedAt]) {
             guard let start else { return }
             do {
-                if animates, readyAt == nil {
+                if animates, releasedAt == nil {
                     // Stop waiting after `maxWait` and leave the feed's own loader to carry on.
                     try await Task.sleep(for: .seconds(max((start + Self.maxWait).timeIntervalSinceNow, 0)))
-                    readyAt = .now
+                    releasedAt = .now
                     return
-                } else if animates {
+                } else if animates, tears {
                     // The reveal draws nothing once it ends, so the opening can just leave.
                     let release = release(from: start)
                     let end = release + (1 - Self.waiting(release.timeIntervalSince(start))) * Self.duration
                     try await Task.sleep(for: .seconds(max(end.timeIntervalSinceNow, 0)))
                 } else {
-                    withAnimation(.easeOut(duration: 0.2)) { fading = true }
-                    try await Task.sleep(for: .milliseconds(220))
+                    // The feed isn't final yet (or motion is reduced), so fade the closed sheet instead of
+                    // tearing it; the burst carries on outward while it fades.
+                    let fade = animates ? Self.duration : 0.2
+                    withAnimation(.easeOut(duration: fade)) { fading = true }
+                    try await Task.sleep(for: .seconds(fade))
                 }
                 onFinish()
             } catch {
@@ -691,7 +700,7 @@ struct SalioOpening: View {
 
     /// When the ring stops waiting: once released, but never before the opening starts.
     private func release(from start: Date) -> Date {
-        max(readyAt ?? .distantFuture, start)
+        max(releasedAt ?? .distantFuture, start)
     }
 
     /// The reveal's progress: it grows and breathes until released, then runs on to 1 at its normal speed.

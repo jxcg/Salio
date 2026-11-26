@@ -46,6 +46,9 @@ struct AsciiReveal: View {
     var core: Color
     /// The trailing characters, split into sectors around the centre.
     var accents: [Color]
+    /// Whether the front tears the sheet open. When false, the characters burst across a sheet that stays
+    /// closed, so nothing behind it shows, and the caller fades the sheet away itself.
+    var opens = true
 
     private static let cell: CGFloat = 14
     /// Densest first: the front is `@`, and the trail behind it thins out to `.`.
@@ -91,7 +94,8 @@ struct AsciiReveal: View {
             for col in 0...columns {
                 let index = row * columns + col
                 let behind = col < columns ? (front - reach[index]) / Self.depth : 1
-                if behind < Self.tear {
+                // The cell past the row's end is never covered, so it closes the last run.
+                if col < columns, !opens || behind < Self.tear {
                     let p = point(row, col)
                     grid.addEllipse(in: CGRect(x: p.x - 1.2, y: p.y - 1.2, width: 2.4, height: 2.4))
                     runStart = runStart ?? col
