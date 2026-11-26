@@ -9,8 +9,16 @@ struct SalioApp: App {
         try ModelContainer(for: Preferences.self, configurations: Self.profileStore)
     }
 
+    /// App state survives backgrounding, so the opening plays on cold launches only.
+    @State private var showsOpening = true
+
     var body: some Scene {
-        WindowGroup { FeedView(profileContainer: profileContainer) }
+        WindowGroup {
+            FeedView(profileContainer: profileContainer)
+                .overlay {
+                    if showsOpening { SalioOpening { showsOpening = false } }
+                }
+        }
     }
 
     private static var profileStore: ModelConfiguration {

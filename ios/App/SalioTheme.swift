@@ -241,7 +241,7 @@ struct RefractedReticleSurface: View {
         key.unicodeScalars.reduce(salt) { $0 &* 31 &+ Int($1.value) }
     }
 
-    private static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
+    fileprivate static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
         var h = UInt64(bitPattern: Int64(row &* 73_856_093 ^ col &* 19_349_663 ^ seed &* 83_492_791))
         h ^= h >> 30
         h &*= 0xBF58_476D_1CE4_E5B9
@@ -577,5 +577,110 @@ struct IndexMarker: View {
             }
         }
         .accessibilityHidden(true)
+    }
+}
+
+/// Salio's first moment on a cold launch: a dot-matrix and ASCII field in the theme's colours that one
+/// refraction wave passes through before it fades into the feed. It never takes taps or blocks loading.
+struct SalioOpening: View {
+    let onFinish: () -> Void
+
+    @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
+    @State private var start = Date()
+    @State private var fading = false
+
+    private static let wobble: TimeInterval = 0.7
+
+    private var animates: Bool {
+        !reduceMotion && !voiceOver && contrast != .increased
+    }
+
+    var body: some View {
+        let palette = appearance.palette(for: colorScheme)
+        TimelineView(.animation(paused: !animates)) { timeline in
+            GeometryReader { proxy in
+                let size = proxy.size
+                let t = min(max(timeline.date.timeIntervalSince(start) / Self.wobble, 0), 1)
+                let eased = 1 - pow(1 - t, 3)
+                // Equatable, so the field is drawn once and each frame only bends it.
+                OpeningField(palette: palette, showsField: contrast != .increased)
+                    .equatable()
+                    .layerEffect(
+                        ShaderLibrary.frostedRefraction(
+                            .float2(CGPoint(x: size.width * 0.5, y: size.height * 0.46)),
+                            .float(Float(eased * hypot(size.width, size.height) * 0.62)),
+                            .float(64),
+                            .float(Float(sin(t * .pi)) * 0.85),
+                            .float(1.8)
+                        ),
+                        maxSampleOffset: CGSize(width: 20, height: 20),
+                        isEnabled: animates && t < 1
+                    )
+            }
+        }
+        .ignoresSafeArea()
+        .opacity(fading ? 0 : 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .task {
+            if animates { try? await Task.sleep(for: .milliseconds(550)) }
+            withAnimation(.easeOut(duration: 0.3)) { fading = true }
+            try? await Task.sleep(for: .milliseconds(320))
+            onFinish()
+        }
+    }
+}
+
+private struct OpeningField: View, Equatable {
+    let palette: SalioPalette
+    let showsField: Bool
+
+    var body: some View {
+        Canvas(rendersAsynchronously: false) { context, size in
+            let bounds = Path(CGRect(origin: .zero, size: size))
+            context.fill(bounds, with: .color(palette.ground))
+            guard showsField else { return }
+
+            let reach = max(size.width, size.height)
+            context.fill(bounds, with: .radialGradient(
+                Gradient(colors: [palette.causticWarm, .clear]),
+                center: CGPoint(x: size.width * 0.78, y: size.height * 0.28), startRadius: 8, endRadius: reach * 0.6
+            ))
+            context.fill(bounds, with: .radialGradient(
+                Gradient(colors: [palette.causticCool, .clear]),
+                center: CGPoint(x: size.width * 0.2, y: size.height * 0.72), startRadius: 8, endRadius: reach * 0.55
+            ))
+
+            let dots = [palette.signal, palette.leaveBy, palette.muted.opacity(0.7), palette.signal.opacity(0.5)]
+            let glyphs = [
+                ("+", palette.signal), (":", palette.muted), ("/", palette.leaveBy), ("·", palette.ink.opacity(0.5)),
+            ].map { glyph, color in
+                context.resolve(Text(glyph).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(color))
+            }
+
+            let step: CGFloat = 13
+            let center = CGPoint(x: size.width * 0.5, y: size.height * 0.46)
+            let farthest = hypot(size.width, size.height) * 0.55
+            for row in 0...Int(size.height / step) {
+                for col in 0...Int(size.width / step) {
+                    let point = CGPoint(x: CGFloat(col) * step + step / 2, y: CGFloat(row) * step + step / 2)
+                    // Densest around the centre so the field reads as a soft dot-matrix bloom, sparse at the edges.
+                    let falloff = min(hypot(point.x - center.x, point.y - center.y) / farthest, 1)
+                    let h = RefractedReticleSurface.cellHash(row: row, col: col, seed: 49)
+                    guard Double(h % 1000) / 1000 > 0.25 + falloff * 0.6 else { continue }
+                    if (h >> 10) % 7 == 0 {
+                        context.draw(glyphs[Int((h >> 14) % UInt64(glyphs.count))], at: point, anchor: .center)
+                    } else {
+                        let radius = 0.9 + CGFloat((h >> 18) % 4) * 0.35
+                        let dot = Path(ellipseIn: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
+                        context.fill(dot, with: .color(dots[Int((h >> 22) % UInt64(dots.count))]))
+                    }
+                }
+            }
+        }
     }
 }
