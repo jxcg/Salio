@@ -1,4 +1,7 @@
 name: Salio
+configFiles:
+  Debug: Salio.xcconfig
+  Release: Salio.xcconfig
 options:
   deploymentTarget:
     iOS: '18.0'

@@ -4,3 +4,4 @@ __pycache__/
 ios/Generated/
 ios/Salio.xcodeproj/
 ios/build/
+ios/Local.xcconfig
