@@ -234,17 +234,13 @@ final class SearchModel {
     }
 }
 
-/// The Duo hinge as the left page needs it: closed, moving, at rest open, or no hinge reported.
-private enum HingePose {
-    case closed, moving, open, unknown
-}
-
 #if compiler(>=6.4.2)
-/// Reads the hinge angle from UIKit, which SwiftUI's `onHingeChange` doesn't expose. Reports `.moving`
-/// while the angle keeps changing, then the resting pose once it has held still for `restDelay`.
+/// Reads the hinge angle from UIKit, which SwiftUI's `onHingeChange` doesn't expose, and turns how fast
+/// it's moving into how frosted the Duo's left page should be: 0 is clear, 1 is fully frosted.
 @available(iOS 27.1, *)
 private struct HingeReader: UIViewRepresentable {
-    let onChange: (HingePose) -> Void
+    /// Called with the frost amount and the animation to reach it.
+    let onFrost: (Double, Animation) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -259,50 +255,60 @@ private struct HingeReader: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UIView, context: Context) {
-        context.coordinator.onChange = onChange
+        context.coordinator.onFrost = onFrost
     }
 
     @MainActor
     final class Coordinator {
-        /// How long the angle must hold still before the hinge counts as at rest.
+        /// How long the angle must hold still before the frost clears.
         static let restDelay: Duration = .milliseconds(200)
         /// Angle changes under about half a degree are sensor noise, not motion.
         static let jitter: CGFloat = 0.009
+        /// Hinge speed that frosts the page fully, in radians a second (about 115° a second).
+        static let fullFrostSpeed = 2.0
 
-        var onChange: (HingePose) -> Void = { _ in }
-        private var restingAngle: CGFloat?
-        private var closed = false
-        private var moving = false
+        var onFrost: (Double, Animation) -> Void = { _, _ in }
+        private var lastMove: (angle: CGFloat, time: ContinuousClock.Instant)?
+        private var speed = 0.0
         private var rest: Task<Void, Never>?
 
-        private var restingPose: HingePose { closed ? .closed : .open }
-
         func update(_ hinge: UIHinge?) {
-            guard let hinge else {
-                rest?.cancel()
-                moving = false
-                restingAngle = nil
-                onChange(.unknown)
+            guard let hinge, hinge.status != .closed else {
+                stop()
+                onFrost(hinge == nil ? 0 : 1, .easeOut(duration: 0.2))
                 return
             }
-            closed = hinge.status == .closed
-            let moved = restingAngle.map { abs(hinge.angle - $0) > Self.jitter } ?? false
-            if restingAngle == nil || moved { restingAngle = hinge.angle }
-            guard moved else {
-                if !moving { onChange(restingPose) }
+            let now = ContinuousClock.now
+            guard let lastMove else {
+                lastMove = (hinge.angle, now)
+                clearWhenStill()
                 return
             }
-            if !moving {
-                moving = true
-                onChange(.moving)
-            }
+            // Measure from the last real move, so slow turns add up past the noise threshold.
+            let delta = abs(hinge.angle - lastMove.angle)
+            guard delta > Self.jitter else { return }
+            let elapsed = now - lastMove.time
+            let seconds = max(Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18, 1 / 120)
+            speed = speed * 0.5 + Double(delta) / seconds * 0.5
+            self.lastMove = (hinge.angle, now)
+            onFrost(min(1, speed / Self.fullFrostSpeed), .linear(duration: 0.12))
+            clearWhenStill()
+        }
+
+        private func clearWhenStill() {
             rest?.cancel()
             rest = Task { [weak self] in
                 try? await Task.sleep(for: Self.restDelay)
                 guard let self, !Task.isCancelled else { return }
-                moving = false
-                onChange(restingPose)
+                speed = 0
+                onFrost(0, .easeInOut(duration: 0.35))
             }
+        }
+
+        private func stop() {
+            rest?.cancel()
+            lastMove = nil
+            speed = 0
         }
     }
 }
@@ -330,7 +336,6 @@ private struct FeedView: View {
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
-    @State private var hingePose: HingePose = .unknown
     @State private var profileSheet: ProfileSheet?
     @AppStorage(SalioTestStore.scopedKey("finishedInterestSetup")) private var finishedInterestSetup = false
     @State private var activeInterests: [String] = []
@@ -342,7 +347,8 @@ private struct FeedView: View {
     @State private var railCamera: MapCameraPosition = .automatic
     @State private var featuredCardRipple = 0
     @State private var mapCardRipple = 0
-    @State private var railSettled = true
+    /// How frosted the Duo's left page is, from 0 (clear) to 1, following how fast the hinge moves.
+    @State private var railFrost = 0.0
     @State private var compactFeedWidth: CGFloat?
     /// Width from the window's leading edge to the Duo fold, so the inner display splits like an open book.
     @State private var foldOffset: CGFloat?
@@ -378,8 +384,11 @@ private struct FeedView: View {
         #if compiler(>=6.4.2)
         if #available(iOS 27.1, *) {
             splitView
-                .background { HingeReader { hingePose = $0 } }
-                .onChange(of: hingePose, initial: true) { settleRail(for: hingePose) }
+                .background {
+                    HingeReader { frost, animation in
+                        withAnimation(animation) { railFrost = frost }
+                    }
+                }
         } else {
             splitView
         }
@@ -393,16 +402,17 @@ private struct FeedView: View {
             if let foldOffset {
                 // Open Duo: two pages meet at the fold, and the right page keeps the cover's feed.
                 HStack(spacing: 0) {
-                    let frosted = !railSettled && allowsUnfoldMotion
+                    let frost = allowsUnfoldMotion ? railFrost : 0
+                    let frosted = frost > 0.05
                     NavigationStack {
                         placeContext.navigationBarTitleDisplayMode(.inline)
                     }
                     .accessibilityHidden(frosted)
-                    // One frosted layer over the whole left page, title and map included, while the hinge moves.
+                    // One frosted layer over the whole left page, title and map included, as thick as the hinge is fast.
                     .overlay {
                         Rectangle()
                             .fill(.thinMaterial)
-                            .opacity(frosted ? 1 : 0)
+                            .opacity(frost)
                             .ignoresSafeArea()
                             .allowsHitTesting(frosted)
                             .accessibilityHidden(true)
@@ -1036,19 +1046,6 @@ private struct FeedView: View {
                         .strokeBorder(palette.border, lineWidth: 1)
                 )
             }
-        }
-    }
-
-    /// Keeps the left page frosted while the Duo is closed or the hinge is moving,
-    /// and clears it once the hinge comes to rest open, partial or full.
-    private func settleRail(for pose: HingePose) {
-        switch pose {
-        case .closed, .moving:
-            guard allowsUnfoldMotion, railSettled else { return }
-            withAnimation(.easeOut(duration: 0.2)) { railSettled = false }
-        case .open, .unknown:
-            guard !railSettled else { return }
-            withAnimation(allowsUnfoldMotion ? .easeInOut(duration: 0.35) : nil) { railSettled = true }
         }
     }
 
