@@ -373,6 +373,12 @@ private struct FeedView: View {
                     .frame(width: foldOffset)
                     NavigationStack { feedPage }
                 }
+                .overlay(alignment: .topLeading) {
+                    BookSpine(palette: palette)
+                        .frame(width: 12)
+                        .offset(x: foldOffset - 6)
+                        .ignoresSafeArea()
+                }
             } else {
                 NavigationSplitView(preferredCompactColumn: $compactColumn) {
                     placeContext
@@ -634,9 +640,7 @@ private struct FeedView: View {
         case .idle:
             statusCard {
                 if locating {
-                    ProgressView("Finding your location…")
-                        .tint(palette.signal)
-                        .foregroundStyle(palette.muted)
+                    AsciiLoader(palette: palette, label: "Finding your location…")
                 } else {
                     Text("Search places or turn on location to see what’s nearby.")
                         .font(.subheadline)
@@ -645,9 +649,7 @@ private struct FeedView: View {
             }
         case .searching:
             statusCard {
-                ProgressView("Finding places…")
-                    .tint(palette.signal)
-                    .foregroundStyle(palette.muted)
+                AsciiLoader(palette: palette, label: "Finding places…")
             }
         case .results:
             VStack(alignment: .leading, spacing: 10) {
@@ -990,7 +992,7 @@ private struct FeedView: View {
                                     .foregroundStyle(palette.ink)
                                     .lineLimit(1)
                                     .layoutPriority(1)
-                                Spacer(minLength: 8)
+                                DotLeader(color: palette.border)
                                 Text(Measurement(value: meters, unit: UnitLength.meters)
                                     .formatted(.measurement(width: .abbreviated, usage: .road)))
                                     .font(.subheadline.monospacedDigit())
