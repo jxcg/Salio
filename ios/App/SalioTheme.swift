@@ -744,24 +744,34 @@ struct OpeningBurst: View {
 
     private static let ramp = ["@", "#", "*", "+", "=", "-", ":", "."]
 
+    /// The ramp's characters as outlines centred on the origin, made once, so each frame fills one path
+    /// per colour instead of typesetting every character.
+    private static let glyphPaths: [Path] = {
+        let font = UIFont.monospacedSystemFont(ofSize: 13, weight: .bold) as CTFont
+        let lineMiddle = (CTFontGetAscent(font) - CTFontGetDescent(font)) / 2
+        return ramp.map { character in
+            var unit = character.utf16.first ?? 0
+            var glyph = CGGlyph()
+            CTFontGetGlyphsForCharacters(font, &unit, &glyph, 1)
+            let advance = CTFontGetAdvancesForGlyphs(font, .horizontal, &glyph, nil, 1)
+            // Flip to SwiftUI's downward y and centre the character's line box, like Text at a `.center` anchor.
+            var transform = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: -advance / 2, ty: lineMiddle)
+            return CTFontCreatePathForGlyph(font, glyph, &transform).map { Path($0) } ?? Path()
+        }
+    }()
+
     var body: some View {
         let ground = Color(hex: dark ? 0x0B0C10 : 0xF2F3F6)
         let gridDot = Color(hex: dark ? 0x2A2C38 : 0xD6D8E2)
         let colors = [Color(hex: dark ? 0xE4E6FF : 0x2E2A78)]
             + Self.mixes[mix].map { Color(hex: dark ? $0.0 : $0.1) }
         Canvas(rendersAsynchronously: false) { context, size in
-            // Resolved once per glyph and colour, then stamped into each cell.
-            let glyphs = colors.map { color in
-                Self.ramp.map { glyph in
-                    context.resolve(Text(glyph).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(color))
-                }
-            }
             let centre = CGPoint(x: size.width / 2, y: size.height / 2)
             let diagonal = hypot(size.width, size.height)
             let thickness = diagonal * 0.22
             let columns = Int(size.width / openingStep)
             var cover = Path(), dots = Path()
-            var marks: [(CGPoint, Int, Int)] = []
+            var inks = [Path](repeating: Path(), count: colors.count)
 
             for row in 0...Int(size.height / openingStep) {
                 let top = CGFloat(row) * openingStep
@@ -788,7 +798,8 @@ struct OpeningBurst: View {
                         let level = min(Int(behind / 0.7 * CGFloat(Self.ramp.count)), Self.ramp.count - 1)
                         // Hue follows the angle, with jittered edges so the sectors blend.
                         let turn = (Double(angle) + .pi) / (2 * .pi) * 3 + Double((h >> 20) % 100) / 250
-                        marks.append((point, level < 2 ? 0 : 1 + Int(turn) % 3, level))
+                        inks[level < 2 ? 0 : 1 + Int(turn) % 3]
+                            .addPath(Self.glyphPaths[level], transform: CGAffineTransform(translationX: point.x, y: point.y))
                     }
                 }
                 if let start = run {
@@ -797,8 +808,8 @@ struct OpeningBurst: View {
             }
             context.fill(cover, with: .color(ground))
             context.fill(dots, with: .color(gridDot))
-            for (point, color, level) in marks {
-                context.draw(glyphs[color][level], at: point, anchor: .center)
+            for (ink, color) in zip(inks, colors) {
+                context.fill(ink, with: .color(color))
             }
         }
     }
