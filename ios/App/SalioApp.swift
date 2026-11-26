@@ -640,7 +640,11 @@ private struct FeedView: View {
         case .idle:
             statusCard {
                 if locating {
-                    AsciiLoader(palette: palette, label: "Finding your location…")
+                    AsciiLoader(
+                        palette: palette,
+                        label: "Finding your location",
+                        words: ["Getting our bearings…", "Consulting the compass…", "Squinting at maps…", "Sniffing the wind…"]
+                    )
                 } else {
                     Text("Search places or turn on location to see what’s nearby.")
                         .font(.subheadline)
@@ -649,7 +653,11 @@ private struct FeedView: View {
             }
         case .searching:
             statusCard {
-                AsciiLoader(palette: palette, label: "Finding places…")
+                AsciiLoader(
+                    palette: palette,
+                    label: "Finding places",
+                    words: ["Rummaging…", "Moseying…", "Sniffing around…", "Scouting…", "Meandering…", "Foraging…", "Pondering…", "Gallivanting…"]
+                )
             }
         case .results:
             VStack(alignment: .leading, spacing: 10) {

@@ -461,29 +461,35 @@ extension View {
     }
 }
 
-/// A `+` that sweeps along a short dotted track while something loads.
+/// A `+` that sweeps along a short dotted track beside a playful word that changes every few seconds.
 struct AsciiLoader: View {
     let palette: SalioPalette
+    /// Read by VoiceOver instead of the changing words.
     let label: String
+    let words: [String]
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let cells = 6
     private static let interval = 0.14
+    private static let ticksPerWord = 13
 
     var body: some View {
-        HStack(spacing: 10) {
-            TimelineView(.periodic(from: .now, by: Self.interval)) { timeline in
-                let tick = Int(timeline.date.timeIntervalSinceReferenceDate / Self.interval)
+        TimelineView(.periodic(from: .now, by: Self.interval)) { timeline in
+            let tick = Int(timeline.date.timeIntervalSinceReferenceDate / Self.interval)
+            HStack(spacing: 10) {
                 Text(Self.frame(reduceMotion ? 2 : tick))
                     .font(.system(.subheadline, design: .monospaced))
                     .foregroundStyle(palette.signal)
+                Text(words[(tick / Self.ticksPerWord) % words.count])
+                    .font(.subheadline)
+                    .foregroundStyle(palette.muted)
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
             }
-            .accessibilityHidden(true)
-            Text(label)
-                .font(.subheadline)
-                .foregroundStyle(palette.muted)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
     }
 
     /// Bounces the `+` back and forth, with `:` either side of it.
