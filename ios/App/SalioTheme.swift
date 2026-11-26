@@ -585,7 +585,6 @@ struct IndexMarker: View {
 struct SalioOpening: View {
     let onFinish: () -> Void
 
-    @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -600,14 +599,13 @@ struct SalioOpening: View {
     }
 
     var body: some View {
-        let palette = appearance.palette(for: colorScheme)
         TimelineView(.animation(paused: !animates)) { timeline in
             GeometryReader { proxy in
                 let size = proxy.size
                 let t = min(max(timeline.date.timeIntervalSince(start) / Self.wobble, 0), 1)
                 let eased = 1 - pow(1 - t, 3)
                 // Equatable, so the field is drawn once and each frame only bends it.
-                OpeningField(palette: palette, showsField: contrast != .increased)
+                OpeningField(dark: colorScheme == .dark, showsField: contrast != .increased)
                     .equatable()
                     .layerEffect(
                         ShaderLibrary.frostedRefraction(
@@ -635,29 +633,38 @@ struct SalioOpening: View {
     }
 }
 
+/// The opening's colours are the same for every theme, because the launch screen before it can't know
+/// the theme: the launch background, with Mist & Glass lavender and Stone & Amber amber side by side.
 private struct OpeningField: View, Equatable {
-    let palette: SalioPalette
+    let dark: Bool
     let showsField: Bool
 
     var body: some View {
+        let ground = Color(hex: dark ? 0x0B0C10 : 0xF2F3F6)
+        let lavender = Color(hex: dark ? 0xB7AEDD : 0x6A5BB3)
+        let amber = Color(hex: dark ? 0xE69B42 : 0xC87316)
+        let green = Color(hex: dark ? 0x4CC38A : 0x1D8150)
+        let grey = Color(hex: dark ? 0x9CA2B3 : 0x5A5F6C)
+        let warm = Color(hex: dark ? 0xE89F6E : 0xF0A670, opacity: dark ? 0.16 : 0.22)
+        let cool = Color(hex: dark ? 0x9586E0 : 0x7666C6, opacity: 0.14)
         Canvas(rendersAsynchronously: false) { context, size in
             let bounds = Path(CGRect(origin: .zero, size: size))
-            context.fill(bounds, with: .color(palette.ground))
+            context.fill(bounds, with: .color(ground))
             guard showsField else { return }
 
             let reach = max(size.width, size.height)
             context.fill(bounds, with: .radialGradient(
-                Gradient(colors: [palette.causticWarm, .clear]),
+                Gradient(colors: [warm, .clear]),
                 center: CGPoint(x: size.width * 0.78, y: size.height * 0.28), startRadius: 8, endRadius: reach * 0.6
             ))
             context.fill(bounds, with: .radialGradient(
-                Gradient(colors: [palette.causticCool, .clear]),
+                Gradient(colors: [cool, .clear]),
                 center: CGPoint(x: size.width * 0.2, y: size.height * 0.72), startRadius: 8, endRadius: reach * 0.55
             ))
 
-            let dots = [palette.signal, palette.leaveBy, palette.muted.opacity(0.7), palette.signal.opacity(0.5)]
+            let dots = [lavender, amber, green, grey.opacity(0.7), lavender.opacity(0.5)]
             let glyphs = [
-                ("+", palette.signal), (":", palette.muted), ("/", palette.leaveBy), ("·", palette.ink.opacity(0.5)),
+                ("+", lavender), (":", grey), ("/", green), ("·", amber),
             ].map { glyph, color in
                 context.resolve(Text(glyph).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(color))
             }

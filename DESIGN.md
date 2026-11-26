@@ -76,7 +76,7 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
 ## 5. Restraint & Accessibility Rules
 
 - **No ASCII clipart:** Never use ASCII illustrations for categories, icons, pins, toggles, or progress bars; use native SF Symbols.
-- **Opening, not a splash:** The static launch screen is only the `ground` colour (`LaunchBackground`), so there is no white flash. On a cold launch, `SalioOpening` then shows a dot-matrix and ASCII field (`+ : / ·`) in the theme's signal, leave-by, muted, and caustic colours; one `frostedRefraction` wave bends it and it fades into the feed in about `0.85s`. The field is drawn once, it never takes taps or delays loading, and under `Reduce Motion`, `VoiceOver`, or `Increase Contrast` it is a plain fade.
+- **Opening, not a splash:** The static launch screen is only the `ground` colour (`LaunchBackground`), so there is no white flash. On a cold launch, `SalioOpening` then shows a dot-matrix and ASCII field (`+ : / ·`) in one theme-agnostic set of colours (Mist & Glass lavender, Stone & Amber amber, leave-by green, muted grey, and the caustic glows), so it matches the launch screen whichever theme is chosen; one `frostedRefraction` wave bends it and it fades into the feed in about `0.85s`. The field is drawn once, it never takes taps or delays loading, and under `Reduce Motion`, `VoiceOver`, or `Increase Contrast` it is a plain fade.
 - **No permanent aberration:** Dispersion returns to `0` at rest so titles and body copy stay razor-sharp.
 - **Accessibility first:**
   - The reticle and glass shader are marked `.accessibilityHidden(true)`.
