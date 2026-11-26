@@ -1,6 +1,5 @@
 import CoreLocation
 import MapKit
-import os
 import SwiftData
 import SwiftUI
 
@@ -84,9 +83,6 @@ struct MapKitPlaceSearcher: PlaceSearching {
     ]
 
     func search(_ request: PlaceRequest) async throws -> [LivePlace] {
-        #if DEBUG
-        Logger(subsystem: Bundle.main.bundleIdentifier ?? "salio", category: "search").notice("MapKit search start")
-        #endif
         let search: MKLocalSearch
         switch request {
         case .nearby(let center):
@@ -149,7 +145,7 @@ struct StubPlaceSearcher: PlaceSearching {
 @MainActor
 @Observable
 final class SearchModel {
-    enum Status: Equatable {
+    enum Status {
         case idle
         case searching
         case results
