@@ -27,6 +27,7 @@ final class SalioUITests: XCTestCase {
     func testLocationOffStillAllowsSearch() {
         let app = launch(arguments: ["-SALIOStubSearch", "-SALIOShowSearchCount"])
         XCTAssertTrue(app.staticTexts["Search places or turn on location to see what’s nearby."].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["turn-on-location"].exists)
         XCTAssertEqual(searchCount(in: app), 0)
         searchField(in: app).tap()
         searchField(in: app).typeText("coffee\n")
