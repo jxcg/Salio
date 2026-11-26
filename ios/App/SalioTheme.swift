@@ -132,7 +132,8 @@ extension Color {
 struct RefractedReticleSurface: View {
     let palette: SalioPalette
     let rippleStart: Date?
-    let rippleOrigin: UnitPoint
+    /// Tap location in the surface's coordinates; nil ripples from near the center.
+    let rippleOrigin: CGPoint?
     var seed: Int = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -155,10 +156,17 @@ struct RefractedReticleSurface: View {
                 let t = progress ?? 0
                 let eased = 1 - pow(1 - t, 3)
                 let maxRadius = hypot(size.width, size.height) * 0.95
-                let origin = CGPoint(x: rippleOrigin.x * size.width, y: rippleOrigin.y * size.height)
+                let origin = rippleOrigin.map {
+                    CGPoint(
+                        x: min(max($0.x, size.width * 0.08), size.width * 0.92),
+                        y: min(max($0.y, size.height * 0.08), size.height * 0.92)
+                    )
+                } ?? CGPoint(x: size.width * 0.55, y: size.height * 0.48)
                 let strength = active ? Float(sin(t * .pi)) : 0
 
-                reticleCanvas
+                // Equatable so ripple frames reuse the drawn reticle instead of redrawing it.
+                ReticleCanvas(palette: palette, seed: seed, showsReticle: contrast != .increased)
+                    .equatable()
                     .layerEffect(
                         ShaderLibrary.frostedRefraction(
                             .float2(origin),
@@ -194,54 +202,6 @@ struct RefractedReticleSurface: View {
         let elapsed = date.timeIntervalSince(rippleStart)
         guard elapsed >= 0, elapsed < Self.rippleDuration else { return nil }
         return elapsed / Self.rippleDuration
-    }
-
-    private var reticleCanvas: some View {
-        Canvas(rendersAsynchronously: false) { context, size in
-            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(palette.card))
-
-            guard contrast != .increased else { return }
-
-            let warmCenter = CGPoint(x: size.width * 0.80, y: size.height * 0.24)
-            let warmRadius = max(size.width, size.height) * 0.68
-            context.fill(
-                Path(CGRect(origin: .zero, size: size)),
-                with: .radialGradient(
-                    Gradient(colors: [palette.causticWarm, .clear]),
-                    center: warmCenter,
-                    startRadius: 6,
-                    endRadius: warmRadius
-                )
-            )
-
-            let coolCenter = CGPoint(x: size.width * 0.22, y: size.height * 0.82)
-            let coolRadius = max(size.width, size.height) * 0.56
-            context.fill(
-                Path(CGRect(origin: .zero, size: size)),
-                with: .radialGradient(
-                    Gradient(colors: [palette.causticCool, .clear]),
-                    center: coolCenter,
-                    startRadius: 6,
-                    endRadius: coolRadius
-                )
-            )
-
-            let glyphs: [(Int, GraphicsContext.ResolvedText)] = [
-                (74, context.resolve(Text("·").font(.system(size: 10, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticleSecondary))),
-                (87, context.resolve(Text(".").font(.system(size: 9, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticleSecondary))),
-                (95, context.resolve(Text("+").font(.system(size: 9, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticlePrimary))),
-                (98, context.resolve(Text(":").font(.system(size: 8.5, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticleSecondary))),
-                (100, context.resolve(Text("/").font(.system(size: 8.5, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticlePrimary.opacity(0.65)))),
-            ]
-            Self.drawAsciiScatter(
-                in: &context,
-                size: size,
-                seed: seed,
-                step: CGSize(width: 19, height: 17),
-                emptyPercent: 44,
-                glyphs: glyphs
-            )
-        }
     }
 
     static func drawAsciiScatter(
@@ -291,6 +251,60 @@ struct RefractedReticleSurface: View {
     }
 }
 
+private struct ReticleCanvas: View, Equatable {
+    let palette: SalioPalette
+    let seed: Int
+    let showsReticle: Bool
+
+    var body: some View {
+        Canvas(rendersAsynchronously: false) { context, size in
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(palette.card))
+
+            guard showsReticle else { return }
+
+            let warmCenter = CGPoint(x: size.width * 0.80, y: size.height * 0.24)
+            let warmRadius = max(size.width, size.height) * 0.68
+            context.fill(
+                Path(CGRect(origin: .zero, size: size)),
+                with: .radialGradient(
+                    Gradient(colors: [palette.causticWarm, .clear]),
+                    center: warmCenter,
+                    startRadius: 6,
+                    endRadius: warmRadius
+                )
+            )
+
+            let coolCenter = CGPoint(x: size.width * 0.22, y: size.height * 0.82)
+            let coolRadius = max(size.width, size.height) * 0.56
+            context.fill(
+                Path(CGRect(origin: .zero, size: size)),
+                with: .radialGradient(
+                    Gradient(colors: [palette.causticCool, .clear]),
+                    center: coolCenter,
+                    startRadius: 6,
+                    endRadius: coolRadius
+                )
+            )
+
+            let glyphs: [(Int, GraphicsContext.ResolvedText)] = [
+                (74, context.resolve(Text("·").font(.system(size: 10, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticleSecondary))),
+                (87, context.resolve(Text(".").font(.system(size: 9, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticleSecondary))),
+                (95, context.resolve(Text("+").font(.system(size: 9, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticlePrimary))),
+                (98, context.resolve(Text(":").font(.system(size: 8.5, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticleSecondary))),
+                (100, context.resolve(Text("/").font(.system(size: 8.5, weight: .regular, design: .monospaced)).foregroundStyle(palette.reticlePrimary.opacity(0.65)))),
+            ]
+            RefractedReticleSurface.drawAsciiScatter(
+                in: &context,
+                size: size,
+                seed: seed,
+                step: CGSize(width: 19, height: 17),
+                emptyPercent: 44,
+                glyphs: glyphs
+            )
+        }
+    }
+}
+
 struct FrostedGlassCard<Content: View>: View {
     let palette: SalioPalette
     let seed: Int
@@ -314,8 +328,7 @@ struct FrostedGlassCard<Content: View>: View {
     }
 
     @State private var rippleStart: Date?
-    @State private var rippleOrigin = UnitPoint(x: 0.55, y: 0.48)
-    @State private var cardSize: CGSize = .zero
+    @State private var rippleOrigin: CGPoint?
 
     var body: some View {
         content()
@@ -329,25 +342,15 @@ struct FrostedGlassCard<Content: View>: View {
                     seed: seed
                 )
             }
-            .onGeometryChange(for: CGSize.self) { proxy in
-                proxy.size
-            } action: { newSize in
-                cardSize = newSize
-            }
             .simultaneousGesture(
                 SpatialTapGesture().onEnded { value in
-                    let width = max(cardSize.width, 1)
-                    let height = max(cardSize.height, 1)
-                    rippleOrigin = UnitPoint(
-                        x: min(max(value.location.x / width, 0.08), 0.92),
-                        y: min(max(value.location.y / height, 0.08), 0.92)
-                    )
+                    rippleOrigin = value.location
                     rippleStart = Date()
                 },
                 isEnabled: tapToRipple
             )
             .onChange(of: rippleTrigger) {
-                rippleOrigin = UnitPoint(x: 0.55, y: 0.48)
+                rippleOrigin = nil
                 rippleStart = Date()
             }
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -395,7 +398,8 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
                 .blur(radius: blurAmount)
                 .overlay {
                     if veilOpacity > 0.01 {
-                        mapAsciiVeil(seed: frameSeed)
+                        AsciiVeil(palette: palette, seed: frameSeed)
+                            .equatable()
                             .opacity(veilOpacity)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
@@ -425,8 +429,14 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
         guard elapsed >= 0, elapsed < duration else { return nil }
         return elapsed / duration
     }
+}
 
-    private func mapAsciiVeil(seed: Int) -> some View {
+/// Equatable so reveal frames redraw the veil only when its seed changes.
+private struct AsciiVeil: View, Equatable {
+    let palette: SalioPalette
+    let seed: Int
+
+    var body: some View {
         Canvas(rendersAsynchronously: false) { context, size in
             context.fill(
                 Path(CGRect(origin: .zero, size: size)),

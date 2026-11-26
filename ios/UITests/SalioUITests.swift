@@ -252,10 +252,8 @@ final class SalioUITests: XCTestCase {
         searchField(in: app).tap()
         searchField(in: app).typeText("coffee\n")
 
-        let started = Date()
         let firstResult = app.buttons["stub-cafe"]
         XCTAssertTrue(firstResult.waitForExistence(timeout: 15))
-        print("SALIO_LATENCY submit-to-result: \(Date().timeIntervalSince(started)) s")
         XCTAssertEqual(searchCount(in: app), 1)
 
         XCUIDevice.shared.press(.home)
