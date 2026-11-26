@@ -470,3 +470,89 @@ extension View {
         modifier(MapBlurRevealModifier(palette: palette, trigger: trigger, hold: hold))
     }
 }
+
+/// A `+` that sweeps along a short dotted track beside a playful word that changes every few seconds.
+struct AsciiLoader: View {
+    let palette: SalioPalette
+    /// Read by VoiceOver instead of the changing words.
+    let label: String
+    let words: [String]
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let cells = 6
+    private static let interval = 0.14
+    private static let ticksPerWord = 13
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: Self.interval)) { timeline in
+            let tick = Int(timeline.date.timeIntervalSinceReferenceDate / Self.interval)
+            HStack(spacing: 10) {
+                Text(Self.frame(reduceMotion ? 2 : tick))
+                    .font(.system(.subheadline, design: .monospaced))
+                    .foregroundStyle(palette.signal)
+                Text(words[(tick / Self.ticksPerWord) % words.count])
+                    .font(.subheadline)
+                    .foregroundStyle(palette.muted)
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+    }
+
+    /// Bounces the `+` back and forth, with `:` either side of it.
+    static func frame(_ tick: Int) -> String {
+        let period = (cells - 1) * 2
+        let step = tick % period
+        let position = step < cells ? step : period - step
+        return (0..<cells).map { cell in
+            switch abs(cell - position) {
+            case 0: "+"
+            case 1: ":"
+            default: "·"
+            }
+        }
+        .joined(separator: " ")
+    }
+}
+
+/// Stitching down the fold of the open Duo, like the binding of a book.
+struct BookSpine: View {
+    let palette: SalioPalette
+
+    var body: some View {
+        Canvas { context, size in
+            let stitch = context.resolve(
+                Text(":").font(.system(size: 9, design: .monospaced)).foregroundStyle(palette.muted.opacity(0.45))
+            )
+            var y: CGFloat = 10
+            while y < size.height {
+                context.draw(stitch, at: CGPoint(x: size.width / 2, y: y), anchor: .center)
+                y += 18
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Dot leaders that join a name to its value, like a book's contents page.
+struct DotLeader: View {
+    let color: Color
+
+    var body: some View {
+        // A one-space base keeps the text baseline without asking for the dots' full width.
+        Text(" ")
+            .frame(maxWidth: .infinity)
+            .overlay(alignment: .leading) {
+                Text(String(repeating: "· ", count: 60))
+                    .foregroundStyle(color)
+                    .fixedSize()
+            }
+            .clipped()
+            .font(.system(.caption, design: .monospaced))
+            .accessibilityHidden(true)
+    }
+}

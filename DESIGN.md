@@ -70,6 +70,8 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
 - **Zero idle burn:** Outside active transitions (`0.62s` frosted ripple, `0.85s` map reveal), `TimelineView` pauses and `.layerEffect(..., isEnabled: false)` bypasses the shader completely.
 - **Draw once per transition:** The reticle canvas and the map's ASCII veil are `Equatable` views, so animation frames reuse the drawn layer and only redraw when the palette, seed, or contrast setting changes.
 
+- **Quiet ASCII touches:** While Salio finds your location or searches, `AsciiLoader` sweeps a `+` along a short `· : + : ·` track beside a playful status word that changes every ~1.8s (`Rummaging…`, `Moseying…`, `Getting our bearings…`) (static under `Reduce Motion`; VoiceOver reads a plain label such as “Finding places”). On the open Duo, `BookSpine` stitches a faint `:` column down the fold like a book's binding, and **Also nearby** rows join names to distances with `DotLeader` dots like a contents page. None of these sit over text or take taps.
+
 ## 5. Restraint & Accessibility Rules
 
 - **No ASCII clipart:** Never use ASCII illustrations for categories, icons, pins, toggles, or progress bars; use native SF Symbols.
