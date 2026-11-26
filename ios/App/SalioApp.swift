@@ -234,10 +234,79 @@ final class SearchModel {
     }
 }
 
-/// The Duo hinge as the left page needs it: closed, open at any angle, or no hinge reported.
+/// The Duo hinge as the left page needs it: closed, moving, at rest open, or no hinge reported.
 private enum HingePose {
-    case closed, open, unknown
+    case closed, moving, open, unknown
 }
+
+#if compiler(>=6.4.2)
+/// Reads the hinge angle from UIKit, which SwiftUI's `onHingeChange` doesn't expose. Reports `.moving`
+/// while the angle keeps changing, then the resting pose once it has held still for `restDelay`.
+@available(iOS 27.1, *)
+private struct HingeReader: UIViewRepresentable {
+    let onChange: (HingePose) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        let coordinator = context.coordinator
+        view.addInteraction(UIHingeInteraction { _, update in
+            MainActor.assumeIsolated { coordinator.update(update.hinge) }
+        })
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.onChange = onChange
+    }
+
+    @MainActor
+    final class Coordinator {
+        /// How long the angle must hold still before the hinge counts as at rest.
+        static let restDelay: Duration = .milliseconds(200)
+        /// Angle changes under about half a degree are sensor noise, not motion.
+        static let jitter: CGFloat = 0.009
+
+        var onChange: (HingePose) -> Void = { _ in }
+        private var restingAngle: CGFloat?
+        private var closed = false
+        private var moving = false
+        private var rest: Task<Void, Never>?
+
+        private var restingPose: HingePose { closed ? .closed : .open }
+
+        func update(_ hinge: UIHinge?) {
+            guard let hinge else {
+                rest?.cancel()
+                moving = false
+                restingAngle = nil
+                onChange(.unknown)
+                return
+            }
+            closed = hinge.status == .closed
+            let moved = restingAngle.map { abs(hinge.angle - $0) > Self.jitter } ?? false
+            if restingAngle == nil || moved { restingAngle = hinge.angle }
+            guard moved else {
+                if !moving { onChange(restingPose) }
+                return
+            }
+            if !moving {
+                moving = true
+                onChange(.moving)
+            }
+            rest?.cancel()
+            rest = Task { [weak self] in
+                try? await Task.sleep(for: Self.restDelay)
+                guard let self, !Task.isCancelled else { return }
+                moving = false
+                onChange(restingPose)
+            }
+        }
+    }
+}
+#endif
 
 private enum Selection: Hashable {
     case sample(FeedEntry.ID)
@@ -311,13 +380,7 @@ private struct FeedView: View {
         #if compiler(>=6.4.2)
         if #available(iOS 27.1, *) {
             splitView
-                .onHingeChange { _, new in
-                    hingePose = switch new.hinge?.status {
-                    case .closed: .closed
-                    case .partiallyOpen, .fullyOpen: .open
-                    default: .unknown
-                    }
-                }
+                .background { HingeReader { hingePose = $0 } }
                 .task(id: hingePose) { await settleRail(for: hingePose) }
         } else {
             splitView
@@ -989,13 +1052,18 @@ private struct FeedView: View {
         }
     }
 
-    /// Tucks the left page away when the Duo closes, and unfolds it once the hinge comes to rest
-    /// in any open pose, partial or full. The hinge reports only its status, so "at rest" means the
-    /// status has held for the display handoff; a new status cancels this and starts again.
+    /// Keeps the left page tucked under its blur while the Duo is closed or the hinge is moving,
+    /// and unfolds it once the hinge comes to rest open, partial or full. A new pose cancels this.
     private func settleRail(for pose: HingePose) async {
         switch pose {
         case .closed:
             if allowsUnfoldMotion {
+                railMapSettled = false
+                railCardSettled = false
+            }
+        case .moving:
+            guard allowsUnfoldMotion else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
                 railMapSettled = false
                 railCardSettled = false
             }
@@ -1010,8 +1078,6 @@ private struct FeedView: View {
                 return
             }
             do {
-                // Let the hinge settle and the inner display reach full brightness before unfolding.
-                try await Task.sleep(for: .milliseconds(180))
                 if !railMapSettled {
                     withAnimation(.spring(response: 0.52, dampingFraction: 0.72)) {
                         railMapSettled = true
