@@ -234,6 +234,11 @@ final class SearchModel {
     }
 }
 
+/// The Duo hinge as the left page needs it: closed, open at any angle, or no hinge reported.
+private enum HingePose {
+    case closed, open, unknown
+}
+
 private enum Selection: Hashable {
     case sample(FeedEntry.ID)
     case live(LivePlace.ID)
@@ -256,7 +261,7 @@ private struct FeedView: View {
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
-    @State private var wasClosed = false
+    @State private var hingePose: HingePose = .unknown
     @State private var profileSheet: ProfileSheet?
     @AppStorage(SalioTestStore.scopedKey("finishedInterestSetup")) private var finishedInterestSetup = false
     @State private var activeInterests: [String] = []
@@ -269,7 +274,6 @@ private struct FeedView: View {
     @State private var featuredCardRipple = 0
     @State private var mapCardRipple = 0
     @State private var railContextRipple = 0
-    @State private var unfoldCount = 0
     @State private var railMapSettled = true
     @State private var railCardSettled = true
     @State private var compactFeedWidth: CGFloat?
@@ -306,50 +310,15 @@ private struct FeedView: View {
         // Build without hinge support on toolchains that predate the Duo SDK.
         #if compiler(>=6.4.2)
         if #available(iOS 27.1, *) {
-            splitView.onHingeChange { old, new in
-                let status = new.hinge?.status
-                guard old.hinge?.status != status else { return }
-                let didUnfold = status == .fullyOpen && wasClosed && allowsUnfoldMotion
-                if status == .closed {
-                    wasClosed = true
-                    if allowsUnfoldMotion {
-                        railMapSettled = false
-                        railCardSettled = false
+            splitView
+                .onHingeChange { _, new in
+                    hingePose = switch new.hinge?.status {
+                    case .closed: .closed
+                    case .partiallyOpen, .fullyOpen: .open
+                    default: .unknown
                     }
-                } else if didUnfold {
-                    railMapSettled = false
-                    railCardSettled = false
-                    unfoldCount += 1
-                    wasClosed = false
-                } else if status == .fullyOpen || status == nil {
-                    wasClosed = false
-                    railMapSettled = true
-                    railCardSettled = true
                 }
-            }
-            .task(id: unfoldCount) {
-                guard unfoldCount > 0, allowsUnfoldMotion else {
-                    railMapSettled = true
-                    railCardSettled = true
-                    return
-                }
-                do {
-                    // Let the inner Duo display reach full brightness before unfolding the rail.
-                    try await Task.sleep(for: .milliseconds(180))
-                    withAnimation(.spring(response: 0.52, dampingFraction: 0.72)) {
-                        railMapSettled = true
-                    }
-                    try await Task.sleep(for: .milliseconds(110))
-                    withAnimation(.spring(response: 0.58, dampingFraction: 0.70)) {
-                        railCardSettled = true
-                    }
-                    try await Task.sleep(for: .milliseconds(110))
-                    railContextRipple += 1
-                } catch {
-                    railMapSettled = true
-                    railCardSettled = true
-                }
-            }
+                .task(id: hingePose) { await settleRail(for: hingePose) }
         } else {
             splitView
         }
@@ -1020,6 +989,46 @@ private struct FeedView: View {
         }
     }
 
+    /// Tucks the left page away when the Duo closes, and unfolds it once the hinge comes to rest
+    /// in any open pose, partial or full. The hinge reports only its status, so "at rest" means the
+    /// status has held for the display handoff; a new status cancels this and starts again.
+    private func settleRail(for pose: HingePose) async {
+        switch pose {
+        case .closed:
+            if allowsUnfoldMotion {
+                railMapSettled = false
+                railCardSettled = false
+            }
+        case .unknown:
+            railMapSettled = true
+            railCardSettled = true
+        case .open:
+            guard !(railMapSettled && railCardSettled) else { return }
+            guard allowsUnfoldMotion else {
+                railMapSettled = true
+                railCardSettled = true
+                return
+            }
+            do {
+                // Let the hinge settle and the inner display reach full brightness before unfolding.
+                try await Task.sleep(for: .milliseconds(180))
+                if !railMapSettled {
+                    withAnimation(.spring(response: 0.52, dampingFraction: 0.72)) {
+                        railMapSettled = true
+                    }
+                    try await Task.sleep(for: .milliseconds(110))
+                }
+                withAnimation(.spring(response: 0.58, dampingFraction: 0.70)) {
+                    railCardSettled = true
+                }
+                try await Task.sleep(for: .milliseconds(110))
+                railContextRipple += 1
+            } catch {
+                // The hinge moved again; the task for the new pose takes over.
+            }
+        }
+    }
+
     private func paperUnfold<Content: View>(
         open: Bool,
         tilt: Double,
@@ -1051,6 +1060,7 @@ private struct FeedView: View {
                 perspective: 0.42
             )
             .opacity(open ? 1 : minOpacity)
+            .accessibilityHidden(!open)
     }
 
     private var railMap: some View {
