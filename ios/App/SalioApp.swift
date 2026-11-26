@@ -11,12 +11,13 @@ struct SalioApp: App {
 
     /// App state survives backgrounding, so the opening plays on cold launches only.
     @State private var showsOpening = true
+    @State private var feedReady = false
 
     var body: some Scene {
         WindowGroup {
-            FeedView(profileContainer: profileContainer)
+            FeedView(profileContainer: profileContainer) { feedReady = true }
                 .overlay {
-                    if showsOpening { SalioOpening { showsOpening = false } }
+                    if showsOpening { SalioOpening(ready: feedReady) { showsOpening = false } }
                 }
         }
     }
@@ -380,6 +381,8 @@ private struct FeedView: View {
     }
 
     let profileContainer: Result<ModelContainer, any Error>
+    /// Called once the first Nearby load has finished, whether it found places, failed, or had no location.
+    var onFirstLoad: () -> Void = {}
     private let entries = FeedEntry.samples
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -519,6 +522,7 @@ private struct FeedView: View {
         .task {
             syncRailCamera()
             await locate(initial: true)
+            onFirstLoad()
         }
         .onChange(of: search.results) {
             camera = .automatic

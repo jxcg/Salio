@@ -582,9 +582,13 @@ struct IndexMarker: View {
 
 /// Salio's first moment on a cold launch: once the app is active, an `AsciiReveal` in a random shape and
 /// colour mix bursts the launch screen open onto the feed, riding one refraction wave, with no fade.
+/// If the feed is ready, it plays straight through; while Nearby is still loading, the ring holds near the
+/// centre and breathes, then tears open as soon as the feed is ready, after `maxWait`, or on a tap.
 /// Its colours follow light and dark but not the theme, because the launch screen before it can't know
 /// the theme. Under Reduce Motion, VoiceOver or Increase Contrast, the launch colour simply fades.
 struct SalioOpening: View {
+    /// Whether the feed has finished its first load, so there is something worth uncovering.
+    let ready: Bool
     let onFinish: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -594,12 +598,18 @@ struct SalioOpening: View {
     @Environment(\.scenePhase) private var scenePhase
     /// Set once the app is active, after iOS's launch zoom, so the reveal plays where it can be seen.
     @State private var start: Date?
+    /// When the ring was released: the feed became ready, `maxWait` passed, or someone tapped.
+    @State private var readyAt: Date?
     @State private var fading = false
     /// Shape and colours are picked once per launch, independently of each other.
     @State private var shape = AsciiReveal.Shape.allCases.randomElement() ?? .starburst
     @State private var accents = Self.mixes.randomElement() ?? Self.mixes[0]
 
     private static let duration: TimeInterval = 0.6
+    /// The longest the ring breathes before tearing open anyway.
+    private static let maxWait: TimeInterval = 2
+    /// While waiting, the ring grows to `hold` at its normal speed, then breathes around it.
+    private static let hold = 0.14, breath = 0.035, breathPeriod: TimeInterval = 1.1
     /// Accent colours as (dark, light) pairs: prism, ember, and tide.
     private static let mixes: [[(dark: UInt32, light: UInt32)]] = [
         [(0x4CC38A, 0x1D8150), (0x9AA0F5, 0x5A55C8), (0xE69B42, 0xC87316)],
@@ -614,7 +624,7 @@ struct SalioOpening: View {
     var body: some View {
         let dark = colorScheme == .dark
         TimelineView(.animation(paused: !animates || start == nil)) { timeline in
-            let progress = start.map { min(timeline.date.timeIntervalSince($0) / Self.duration, 1) } ?? 0
+            let progress = start.map { progress(at: timeline.date, from: $0) } ?? 0
             if animates {
                 AsciiReveal(
                     progress: progress,
@@ -644,21 +654,57 @@ struct SalioOpening: View {
         }
         .ignoresSafeArea()
         .opacity(fading ? 0 : 1)
-        .allowsHitTesting(false)
+        // While the ring waits, a tap releases it instead of reaching the feed hidden underneath.
+        .contentShape(.rect)
+        .onTapGesture { readyAt = readyAt ?? .now }
+        .allowsHitTesting(animates && readyAt == nil)
         .accessibilityHidden(true)
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active, start == nil { start = .now }
         }
-        .task(id: start) {
-            guard start != nil else { return }
-            if animates {
-                // The reveal draws nothing once it ends, so the opening can just leave.
-                try? await Task.sleep(for: .seconds(Self.duration))
-            } else {
-                withAnimation(.easeOut(duration: 0.2)) { fading = true }
-                try? await Task.sleep(for: .milliseconds(220))
-            }
-            onFinish()
+        .onChange(of: ready, initial: true) {
+            if ready, readyAt == nil { readyAt = .now }
         }
+        .task(id: [start, readyAt]) {
+            guard let start else { return }
+            do {
+                if animates, readyAt == nil {
+                    // Stop waiting after `maxWait` and leave the feed's own loader to carry on.
+                    try await Task.sleep(for: .seconds(max((start + Self.maxWait).timeIntervalSinceNow, 0)))
+                    readyAt = .now
+                    return
+                } else if animates {
+                    // The reveal draws nothing once it ends, so the opening can just leave.
+                    let release = release(from: start)
+                    let end = release + (1 - Self.waiting(release.timeIntervalSince(start))) * Self.duration
+                    try await Task.sleep(for: .seconds(max(end.timeIntervalSinceNow, 0)))
+                } else {
+                    withAnimation(.easeOut(duration: 0.2)) { fading = true }
+                    try await Task.sleep(for: .milliseconds(220))
+                }
+                onFinish()
+            } catch {
+                // Cancelled because the ring was released; the next run of this task finishes instead.
+            }
+        }
+    }
+
+    /// When the ring stops waiting: once released, but never before the opening starts.
+    private func release(from start: Date) -> Date {
+        max(readyAt ?? .distantFuture, start)
+    }
+
+    /// The reveal's progress: it grows and breathes until released, then runs on to 1 at its normal speed.
+    private func progress(at date: Date, from start: Date) -> Double {
+        let release = release(from: start)
+        let waited = Self.waiting(min(date, release).timeIntervalSince(start))
+        return min(waited + max(date.timeIntervalSince(release), 0) / Self.duration, 1)
+    }
+
+    /// Progress while waiting: the normal rise up to `hold`, then a slow breath around it.
+    private static func waiting(_ elapsed: TimeInterval) -> Double {
+        let rise = hold * duration
+        guard elapsed > rise else { return max(elapsed, 0) / duration }
+        return hold + breath * sin((elapsed - rise) / breathPeriod * 2 * .pi)
     }
 }
