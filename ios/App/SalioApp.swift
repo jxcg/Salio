@@ -277,6 +277,8 @@ private struct FeedView: View {
     @State private var railMapSettled = true
     @State private var railCardSettled = true
     @State private var compactFeedWidth: CGFloat?
+    /// Width from the window's leading edge to the Duo fold, so the inner display splits like an open book.
+    @State private var foldOffset: CGFloat?
 
     private var palette: SalioPalette {
         appearance.palette(for: colorScheme)
@@ -361,59 +363,27 @@ private struct FeedView: View {
     }
 
     private var splitView: some View {
-        NavigationSplitView(preferredCompactColumn: $compactColumn) {
-            placeContext
-                .navigationSplitViewColumnWidth(min: 270, ideal: 310, max: 340)
-        } detail: {
-            Group {
-                if showMap, search.status == .results {
-                    placesMap
-                        .mapBlurReveal(palette: palette, trigger: showMap)
-                        .safeAreaInset(edge: .bottom) {
-                            if let place = selectedLive {
-                                FrostedGlassCard(
-                                    palette: palette,
-                                    seedKey: place.id,
-                                    salt: 17,
-                                    rippleTrigger: mapCardRipple,
-                                    tapToRipple: true
-                                ) {
-                                    featuredPlaceContent(
-                                        title: place.name,
-                                        subtitle: place.address,
-                                        reason: search.matchReason(for: place, interests: activeInterests),
-                                        selected: true
-                                    )
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 8)
-                            }
-                        }
-                } else {
-                    placeList
-                }
-            }
-            .navigationBarBackButtonHidden()
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    if !showMap, center != nil {
-                        Button("Refresh nearby", systemImage: "arrow.clockwise") {
-                            Task { await locate(initial: false) }
-                        }
-                        .disabled(locating || search.status == .searching)
-                        .accessibilityIdentifier("refresh-nearby")
+        Group {
+            if let foldOffset {
+                // Open Duo: two pages meet at the fold, and the right page keeps the cover's feed.
+                HStack(spacing: 0) {
+                    NavigationStack {
+                        placeContext.navigationBarTitleDisplayMode(.inline)
                     }
-                    if search.status == .results {
-                        Button(showMap ? "Show list" : "Show map", systemImage: showMap ? "list.bullet" : "map") {
-                            showMap.toggle()
-                        }
-                        .accessibilityIdentifier(showMap ? "show-list" : "show-map")
-                    }
-                    Button("Profile", systemImage: "person.crop.circle") { profileSheet = .profile }
+                    .frame(width: foldOffset)
+                    NavigationStack { feedPage }
                 }
+            } else {
+                NavigationSplitView(preferredCompactColumn: $compactColumn) {
+                    placeContext
+                        .navigationSplitViewColumnWidth(min: 270, ideal: 310, max: 340)
+                } detail: {
+                    feedPage
+                }
+                .navigationSplitViewStyle(.balanced)
             }
         }
-        .navigationSplitViewStyle(.balanced)
+        .background { foldReader }
         .tint(palette.signal)
         .sheet(item: $profileSheet) { sheet in
             switch profileContainer {
@@ -446,6 +416,71 @@ private struct FeedView: View {
         .onChange(of: selection) {
             syncRailCamera()
         }
+    }
+
+    private var feedPage: some View {
+        Group {
+            if showMap, search.status == .results {
+                placesMap
+                    .mapBlurReveal(palette: palette, trigger: showMap)
+                    .safeAreaInset(edge: .bottom) {
+                        if let place = selectedLive {
+                            FrostedGlassCard(
+                                palette: palette,
+                                seedKey: place.id,
+                                salt: 17,
+                                rippleTrigger: mapCardRipple,
+                                tapToRipple: true
+                            ) {
+                                featuredPlaceContent(
+                                    title: place.name,
+                                    subtitle: place.address,
+                                    reason: search.matchReason(for: place, interests: activeInterests),
+                                    selected: true
+                                )
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 8)
+                        }
+                    }
+            } else {
+                placeList
+            }
+        }
+        .navigationBarBackButtonHidden()
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if !showMap, center != nil {
+                    Button("Refresh nearby", systemImage: "arrow.clockwise") {
+                        Task { await locate(initial: false) }
+                    }
+                    .disabled(locating || search.status == .searching)
+                    .accessibilityIdentifier("refresh-nearby")
+                }
+                if search.status == .results {
+                    Button(showMap ? "Show list" : "Show map", systemImage: showMap ? "list.bullet" : "map") {
+                        showMap.toggle()
+                    }
+                    .accessibilityIdentifier(showMap ? "show-list" : "show-map")
+                }
+                Button("Profile", systemImage: "person.crop.circle") { profileSheet = .profile }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var foldReader: some View {
+        #if compiler(>=6.4.2)
+        if #available(iOS 27.1, *) {
+            GeometryReader { proxy in
+                // A flat inner display still reports the fold as an inactive division region.
+                let fold = proxy.reservedRegions(kind: .division, options: [.includeInactive]).first?.frame.midX
+                // Ignore a fold outside the middle of this window, such as when Salio shares the screen.
+                let offset = fold.flatMap { (proxy.size.width * 0.3...proxy.size.width * 0.7).contains($0) ? $0 : nil }
+                Color.clear.onChange(of: offset, initial: true) { _, offset in foldOffset = offset }
+            }
+        }
+        #endif
     }
 
     private var placeList: some View {
@@ -821,7 +856,7 @@ private struct FeedView: View {
                 ) {
                     railMap
                         .mapBlurReveal(palette: palette, trigger: railMapRevealKey, hold: !mapOpen)
-                        .frame(height: 180)
+                        .frame(height: foldOffset == nil ? 180 : 240)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -915,6 +950,8 @@ private struct FeedView: View {
                         }
                     }
                 }
+
+                alsoNearby
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)
@@ -923,6 +960,58 @@ private struct FeedView: View {
         .scrollClipDisabled()
         .background(palette.ground.ignoresSafeArea())
         .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
+    }
+
+    /// Up to three other places closest to the selected one, so the left page answers "what else is near?".
+    @ViewBuilder
+    private var alsoNearby: some View {
+        let anchor = selectedLive?.coordinate ?? selectedSample?.coordinate
+        let others = search.results.filter { $0.id != selectedLive?.id }
+        if let anchor, !others.isEmpty {
+            let from = CLLocation(latitude: anchor.latitude, longitude: anchor.longitude)
+            let nearest = others
+                .map { ($0, from.distance(from: CLLocation(latitude: $0.latitude, longitude: $0.longitude))) }
+                .sorted { $0.1 < $1.1 }
+                .prefix(3)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Also nearby")
+                    .font(.caption.weight(.semibold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(palette.muted)
+                    .padding(.horizontal, 4)
+                VStack(spacing: 0) {
+                    ForEach(Array(nearest), id: \.0.id) { place, meters in
+                        Button {
+                            selection = .live(place.id)
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(place.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(palette.ink)
+                                    .lineLimit(1)
+                                    .layoutPriority(1)
+                                Spacer(minLength: 8)
+                                Text(Measurement(value: meters, unit: UnitLength.meters)
+                                    .formatted(.measurement(width: .abbreviated, usage: .road)))
+                                    .font(.subheadline.monospacedDigit())
+                                    .foregroundStyle(palette.muted)
+                                    .layoutPriority(1)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("nearby-\(place.id)")
+                    }
+                }
+                .background(palette.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(palette.border, lineWidth: 1)
+                )
+            }
+        }
     }
 
     private func paperUnfold<Content: View>(
