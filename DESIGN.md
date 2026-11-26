@@ -55,7 +55,7 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
 - **Timing & micro-labels:** SF Mono / `.monospacedDigit()` for leave-by times and compact metadata.
 - **Corner radii:** `999pt` (`Capsule`) for search bar and primary action pills; `20pt` for focal cards; `16pt` for grouped row containers.
 - **Touch targets:** At least `44×44pt` for toolbar buttons and map pins.
-- **iPhone Duo compact map rail:** When unfolded, the left column stays constrained to a compact rail (`270–340pt`, ~34% of the display) pairing a live muted Apple Map crop (`180pt`) with a frosted-glass Timing / Place details card (`Open in Maps` for live places), while the right-hand Nearby feed locks to its measured closed-Duo cover width (`compactFeedWidth`, defaulting to `382pt`) so card widths, line wraps, and vertical rhythm stay identical across fold and unfold.
+- **iPhone Duo book layout:** When unfolded, Salio reads the fold from the display's division region and splits the inner display 50/50 like an open book. The right page keeps the closed cover's Nearby feed and toolbar, so cards, line wraps, and rhythm carry across the fold. The left page pairs a muted Apple Map crop (`240pt`) with the frosted Timing / Place details card (`Open in Maps` for live places) and an **Also nearby** list of the three places closest to the selection, with distances. iPad and other regular-width windows keep the balanced split view with a `270–340pt` context column.
 
 ## 4. Optical Frosted-Glass Refraction
 
