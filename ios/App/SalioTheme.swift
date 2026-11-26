@@ -580,8 +580,9 @@ struct IndexMarker: View {
     }
 }
 
-/// Salio's first moment on a cold launch: a dot-matrix and ASCII field in the theme's colours that one
-/// refraction wave passes through before it fades into the feed. It never takes taps or blocks loading.
+/// Salio's first moment on a cold launch: a dot-matrix waveform that swells out of one line of dots,
+/// tipped with ASCII marks, while one refraction wave passes through before it fades into the feed.
+/// It never takes taps or blocks loading.
 struct SalioOpening: View {
     let onFinish: () -> Void
 
@@ -589,7 +590,9 @@ struct SalioOpening: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorSchemeContrast) private var contrast
-    @State private var start = Date()
+    @Environment(\.scenePhase) private var scenePhase
+    /// Set once the app is active, after iOS's launch zoom, so the wave rises where it can be seen.
+    @State private var start: Date?
     @State private var fading = false
 
     private static let wobble: TimeInterval = 0.7
@@ -599,32 +602,43 @@ struct SalioOpening: View {
     }
 
     var body: some View {
+        let dark = colorScheme == .dark
         TimelineView(.animation(paused: !animates)) { timeline in
             GeometryReader { proxy in
                 let size = proxy.size
-                let t = min(max(timeline.date.timeIntervalSince(start) / Self.wobble, 0), 1)
+                let elapsed = start.map { max(timeline.date.timeIntervalSince($0), 0) } ?? 0
+                let t = min(elapsed / Self.wobble, 1)
                 let eased = 1 - pow(1 - t, 3)
-                // Equatable, so the field is drawn once and each frame only bends it.
-                OpeningField(dark: colorScheme == .dark, showsField: contrast != .increased)
-                    .equatable()
-                    .layerEffect(
-                        ShaderLibrary.frostedRefraction(
-                            .float2(CGPoint(x: size.width * 0.5, y: size.height * 0.46)),
-                            .float(Float(eased * hypot(size.width, size.height) * 0.62)),
-                            .float(64),
-                            .float(Float(sin(t * .pi)) * 0.85),
-                            .float(1.8)
-                        ),
-                        maxSampleOffset: CGSize(width: 20, height: 20),
-                        isEnabled: animates && t < 1
-                    )
+                ZStack {
+                    // Equatable, so the dim grid is drawn once and only the wave redraws each frame.
+                    OpeningGrid(dark: dark, showsField: contrast != .increased)
+                        .equatable()
+                    if contrast != .increased {
+                        OpeningWave(dark: dark, rise: animates ? eased : 1, time: animates ? elapsed : 0)
+                    }
+                }
+                .layerEffect(
+                    ShaderLibrary.frostedRefraction(
+                        .float2(CGPoint(x: size.width * 0.5, y: size.height * 0.5)),
+                        .float(Float(eased * hypot(size.width, size.height) * 0.62)),
+                        .float(64),
+                        .float(Float(sin(t * .pi)) * 0.85),
+                        .float(1.8)
+                    ),
+                    maxSampleOffset: CGSize(width: 20, height: 20),
+                    isEnabled: animates && t < 1
+                )
             }
         }
         .ignoresSafeArea()
         .opacity(fading ? 0 : 1)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .task {
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active, start == nil { start = .now }
+        }
+        .task(id: start) {
+            guard start != nil else { return }
             if animates { try? await Task.sleep(for: .milliseconds(550)) }
             withAnimation(.easeOut(duration: 0.3)) { fading = true }
             try? await Task.sleep(for: .milliseconds(320))
@@ -633,60 +647,100 @@ struct SalioOpening: View {
     }
 }
 
-/// The opening's colours are the same for every theme, because the launch screen before it can't know
-/// the theme: the launch background, with Mist & Glass lavender and Stone & Amber amber side by side.
-private struct OpeningField: View, Equatable {
+/// The opening's dot pitch, shared by the grid and the wave so their dots line up.
+private let openingStep: CGFloat = 14
+
+/// The launch background with a faint dot grid. The opening's colours are the same for every theme,
+/// because the launch screen before it can't know the theme; they change only between light and dark.
+private struct OpeningGrid: View, Equatable {
     let dark: Bool
     let showsField: Bool
 
     var body: some View {
         let ground = Color(hex: dark ? 0x0B0C10 : 0xF2F3F6)
-        let lavender = Color(hex: dark ? 0xB7AEDD : 0x6A5BB3)
-        let amber = Color(hex: dark ? 0xE69B42 : 0xC87316)
-        let green = Color(hex: dark ? 0x4CC38A : 0x1D8150)
-        let grey = Color(hex: dark ? 0x9CA2B3 : 0x5A5F6C)
-        let warm = Color(hex: dark ? 0xE89F6E : 0xF0A670, opacity: dark ? 0.16 : 0.22)
-        let cool = Color(hex: dark ? 0x9586E0 : 0x7666C6, opacity: 0.14)
+        let dot = Color(hex: dark ? 0x2A2C38 : 0xD6D8E2)
         Canvas(rendersAsynchronously: false) { context, size in
-            let bounds = Path(CGRect(origin: .zero, size: size))
-            context.fill(bounds, with: .color(ground))
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(ground))
             guard showsField else { return }
-
-            let reach = max(size.width, size.height)
-            context.fill(bounds, with: .radialGradient(
-                Gradient(colors: [warm, .clear]),
-                center: CGPoint(x: size.width * 0.78, y: size.height * 0.28), startRadius: 8, endRadius: reach * 0.6
-            ))
-            context.fill(bounds, with: .radialGradient(
-                Gradient(colors: [cool, .clear]),
-                center: CGPoint(x: size.width * 0.2, y: size.height * 0.72), startRadius: 8, endRadius: reach * 0.55
-            ))
-
-            let dots = [lavender, amber, green, grey.opacity(0.7), lavender.opacity(0.5)]
-            let glyphs = [
-                ("+", lavender), (":", grey), ("/", green), ("·", amber),
-            ].map { glyph, color in
-                context.resolve(Text(glyph).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(color))
-            }
-
-            let step: CGFloat = 13
-            let center = CGPoint(x: size.width * 0.5, y: size.height * 0.46)
-            let farthest = hypot(size.width, size.height) * 0.55
-            for row in 0...Int(size.height / step) {
-                for col in 0...Int(size.width / step) {
-                    let point = CGPoint(x: CGFloat(col) * step + step / 2, y: CGFloat(row) * step + step / 2)
-                    // Densest around the centre so the field reads as a soft dot-matrix bloom, sparse at the edges.
-                    let falloff = min(hypot(point.x - center.x, point.y - center.y) / farthest, 1)
-                    let h = RefractedReticleSurface.cellHash(row: row, col: col, seed: 49)
-                    guard Double(h % 1000) / 1000 > 0.25 + falloff * 0.6 else { continue }
-                    if (h >> 10) % 7 == 0 {
-                        context.draw(glyphs[Int((h >> 14) % UInt64(glyphs.count))], at: point, anchor: .center)
-                    } else {
-                        let radius = 0.9 + CGFloat((h >> 18) % 4) * 0.35
-                        let dot = Path(ellipseIn: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
-                        context.fill(dot, with: .color(dots[Int((h >> 22) % UInt64(dots.count))]))
-                    }
+            var dots = Path()
+            for row in 0...Int(size.height / openingStep) {
+                for col in 0...Int(size.width / openingStep) {
+                    let x = CGFloat(col) * openingStep + openingStep / 2
+                    let y = CGFloat(row) * openingStep + openingStep / 2
+                    dots.addEllipse(in: CGRect(x: x - 1.2, y: y - 1.2, width: 2.4, height: 2.4))
                 }
+            }
+            context.fill(dots, with: .color(dot))
+        }
+    }
+}
+
+/// A waveform of dots: each column's height breathes over time, dots swell towards the middle of the
+/// wave, a bright band runs along the centre line, the fringe shifts hue across the screen, and some
+/// peaks carry an amber, green or lavender mark.
+private struct OpeningWave: View {
+    let dark: Bool
+    /// 0 is a single line of dots, 1 is the full wave.
+    let rise: Double
+    let time: TimeInterval
+
+    var body: some View {
+        // Centre to edge: core, light, body, fringe. In light mode the core is the darkest ink instead.
+        let bands = dark
+            ? [Color(hex: 0xE4E6FF), Color(hex: 0xB9BEFF), Color(hex: 0x8A93F7)]
+            : [Color(hex: 0x2E2A78), Color(hex: 0x4B47B8), Color(hex: 0x7C82E8)]
+        // The fringe splits like light through a prism: green, lavender, then amber across the screen.
+        let fringes = dark
+            ? [Color(hex: 0x3E9F74), Color(hex: 0x575DA8), Color(hex: 0xC4843A)]
+            : [Color(hex: 0x7CC4A0), Color(hex: 0xB4B7EA), Color(hex: 0xE8B579)]
+        let marks = dark
+            ? [Color(hex: 0xE69B42), Color(hex: 0x4CC38A), Color(hex: 0xB7AEDD)]
+            : [Color(hex: 0xC87316), Color(hex: 0x1D8150), Color(hex: 0x6A5BB3)]
+        Canvas(rendersAsynchronously: false) { context, size in
+            let glyphs = zip(["+", ":", "*"], marks).map { glyph, color in
+                context.resolve(Text(glyph).font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundStyle(color))
+            }
+            let columns = Int(size.width / openingStep)
+            let rows = Int(size.height / openingStep)
+            let centre = size.height / 2
+            let reach = size.height * 0.45
+            let colors = bands + fringes
+            var paths = [Path](repeating: Path(), count: colors.count)
+
+            for col in 0...columns {
+                let x = CGFloat(col) * openingStep + openingStep / 2
+                let u = Double(x / size.width)
+                let h = RefractedReticleSurface.cellHash(row: 0, col: col, seed: 49)
+                // A bell across the screen, broken into uneven spikes that drift with time.
+                let bell = exp(-pow((u - 0.5) / 0.34, 2))
+                let spikes = 0.55 + 0.45 * sin(u * 19 + time * 2.2) * sin(u * 7.3 - time * 1.3)
+                let jitter = 0.82 + 0.18 * Double(h % 100) / 100
+                let height = 0.05 + rise * 0.95 * bell * spikes * jitter
+                let fringe = bands.count + min(Int(u * 3), 2)
+
+                for row in 0...rows {
+                    let y = CGFloat(row) * openingStep + openingStep / 2
+                    let dy = Double(abs(y - centre) / reach)
+                    guard dy < height else { continue }
+                    let inside = 1 - dy / height
+                    let radius = openingStep * 0.47 * CGFloat(0.4 + 0.6 * min(inside * 3, 1))
+                    let band = inside < 0.16 ? fringe : dy < 0.09 ? 0 : dy < 0.2 ? 1 : 2
+                    paths[band].addEllipse(in: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
+                }
+
+                // ASCII tips on every few peaks, once the wave has opened.
+                if rise > 0.5, height > 0.3, h % 4 == 0 {
+                    let tip = CGFloat(height) * reach + openingStep * 1.2
+                    var mark = context
+                    mark.opacity = (rise - 0.5) * 2
+                    let glyph = glyphs[Int((h >> 8) % UInt64(glyphs.count))]
+                    mark.draw(glyph, at: CGPoint(x: x, y: centre - tip), anchor: .center)
+                    mark.draw(glyph, at: CGPoint(x: x, y: centre + tip), anchor: .center)
+                }
+            }
+            // Fringes first, core last, so the brighter dots sit on top where they overlap.
+            for (path, color) in zip(paths, colors).reversed() {
+                context.fill(path, with: .color(color))
             }
         }
     }
