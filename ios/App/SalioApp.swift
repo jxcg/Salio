@@ -280,6 +280,86 @@ final class SearchModel {
     }
 }
 
+#if compiler(>=6.4.2)
+/// Reads the hinge angle from UIKit, which SwiftUI's `onHingeChange` doesn't expose, and turns how fast
+/// it's moving into how frosted the Duo's left page should be: 0 is clear, 1 is fully frosted.
+@available(iOS 27.1, *)
+private struct HingeReader: UIViewRepresentable {
+    /// Called with the frost amount and the animation to reach it.
+    let onFrost: (Double, Animation) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        let coordinator = context.coordinator
+        view.addInteraction(UIHingeInteraction { _, update in
+            MainActor.assumeIsolated { coordinator.update(update.hinge) }
+        })
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.onFrost = onFrost
+    }
+
+    @MainActor
+    final class Coordinator {
+        /// How long the angle must hold still before the frost clears.
+        static let restDelay: Duration = .milliseconds(200)
+        /// Angle changes under about half a degree are sensor noise, not motion.
+        static let jitter: CGFloat = 0.009
+        /// Hinge speed that frosts the page fully, in radians a second (about 115° a second).
+        static let fullFrostSpeed = 2.0
+
+        var onFrost: (Double, Animation) -> Void = { _, _ in }
+        private var lastMove: (angle: CGFloat, time: ContinuousClock.Instant)?
+        private var speed = 0.0
+        private var rest: Task<Void, Never>?
+
+        func update(_ hinge: UIHinge?) {
+            guard let hinge, hinge.status != .closed else {
+                stop()
+                onFrost(hinge == nil ? 0 : 1, .easeOut(duration: 0.2))
+                return
+            }
+            let now = ContinuousClock.now
+            guard let lastMove else {
+                lastMove = (hinge.angle, now)
+                clearWhenStill()
+                return
+            }
+            // Measure from the last real move, so slow turns add up past the noise threshold.
+            let delta = abs(hinge.angle - lastMove.angle)
+            guard delta > Self.jitter else { return }
+            let elapsed = now - lastMove.time
+            let seconds = max(Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18, 1 / 120)
+            speed = speed * 0.5 + Double(delta) / seconds * 0.5
+            self.lastMove = (hinge.angle, now)
+            onFrost(min(1, speed / Self.fullFrostSpeed), .linear(duration: 0.12))
+            clearWhenStill()
+        }
+
+        private func clearWhenStill() {
+            rest?.cancel()
+            rest = Task { [weak self] in
+                try? await Task.sleep(for: Self.restDelay)
+                guard let self, !Task.isCancelled else { return }
+                speed = 0
+                onFrost(0, .easeInOut(duration: 0.35))
+            }
+        }
+
+        private func stop() {
+            rest?.cancel()
+            lastMove = nil
+            speed = 0
+        }
+    }
+}
+#endif
+
 private enum Selection: Hashable {
     case sample(FeedEntry.ID)
     case live(LivePlace.ID)
@@ -303,7 +383,6 @@ private struct FeedView: View {
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
-    @State private var wasClosed = false
     @State private var profileSheet: ProfileSheet?
     @AppStorage(SalioTestStore.scopedKey("finishedInterestSetup")) private var finishedInterestSetup = false
     @State private var activeInterests: [String] = []
@@ -315,10 +394,8 @@ private struct FeedView: View {
     @State private var railCamera: MapCameraPosition = .automatic
     @State private var featuredCardRipple = 0
     @State private var mapCardRipple = 0
-    @State private var railContextRipple = 0
-    @State private var unfoldCount = 0
-    @State private var railMapSettled = true
-    @State private var railCardSettled = true
+    /// How frosted the Duo's left page is, from 0 (clear) to 1, following how fast the hinge moves.
+    @State private var railFrost = 0.0
     @State private var compactFeedWidth: CGFloat?
     /// Width from the window's leading edge to the Duo fold, so the inner display splits like an open book.
     @State private var foldOffset: CGFloat?
@@ -353,50 +430,12 @@ private struct FeedView: View {
         // Build without hinge support on toolchains that predate the Duo SDK.
         #if compiler(>=6.4.2)
         if #available(iOS 27.1, *) {
-            splitView.onHingeChange { old, new in
-                let status = new.hinge?.status
-                guard old.hinge?.status != status else { return }
-                let didUnfold = status == .fullyOpen && wasClosed && allowsUnfoldMotion
-                if status == .closed {
-                    wasClosed = true
-                    if allowsUnfoldMotion {
-                        railMapSettled = false
-                        railCardSettled = false
+            splitView
+                .background {
+                    HingeReader { frost, animation in
+                        withAnimation(animation) { railFrost = frost }
                     }
-                } else if didUnfold {
-                    railMapSettled = false
-                    railCardSettled = false
-                    unfoldCount += 1
-                    wasClosed = false
-                } else if status == .fullyOpen || status == nil {
-                    wasClosed = false
-                    railMapSettled = true
-                    railCardSettled = true
                 }
-            }
-            .task(id: unfoldCount) {
-                guard unfoldCount > 0, allowsUnfoldMotion else {
-                    railMapSettled = true
-                    railCardSettled = true
-                    return
-                }
-                do {
-                    // Let the inner Duo display reach full brightness before unfolding the rail.
-                    try await Task.sleep(for: .milliseconds(180))
-                    withAnimation(.spring(response: 0.52, dampingFraction: 0.72)) {
-                        railMapSettled = true
-                    }
-                    try await Task.sleep(for: .milliseconds(110))
-                    withAnimation(.spring(response: 0.58, dampingFraction: 0.70)) {
-                        railCardSettled = true
-                    }
-                    try await Task.sleep(for: .milliseconds(110))
-                    railContextRipple += 1
-                } catch {
-                    railMapSettled = true
-                    railCardSettled = true
-                }
-            }
         } else {
             splitView
         }
@@ -410,10 +449,25 @@ private struct FeedView: View {
             if let foldOffset {
                 // Open Duo: two pages meet at the fold, and the right page keeps the cover's feed.
                 HStack(spacing: 0) {
+                    let frost = allowsUnfoldMotion ? railFrost : 0
+                    let frosted = frost > 0.05
                     NavigationStack {
                         placeContext.navigationBarTitleDisplayMode(.inline)
                     }
+                    .accessibilityHidden(frosted)
+                    // One frosted layer over the whole left page, title and map included, as thick as the hinge is fast.
+                    .overlay {
+                        Rectangle()
+                            .fill(.thinMaterial)
+                            .opacity(frost)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(frosted)
+                            .accessibilityHidden(true)
+                    }
                     .frame(width: foldOffset)
+                    // Nothing on the left page, ASCII veil included, may draw past the fold while folding.
+                    // The mask runs full height so the page can still reach under the status bar.
+                    .mask { Rectangle().ignoresSafeArea(edges: .vertical) }
                     NavigationStack { feedPage }
                 }
                 .overlay(alignment: .topLeading) {
@@ -901,45 +955,24 @@ private struct FeedView: View {
     }
 
     private var placeContext: some View {
-        let mapOpen = railMapSettled || !allowsUnfoldMotion
-        let cardOpen = railCardSettled || !allowsUnfoldMotion
-        return ScrollView {
+        ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                paperUnfold(
-                    open: mapOpen,
-                    tilt: -11,
-                    scaleX: 0.92,
-                    scaleY: 0.97,
-                    minOpacity: 0.45,
-                    creaseOpacity: 0.10,
-                    cornerRadius: 18
-                ) {
-                    railMap
-                        .mapBlurReveal(palette: palette, trigger: railMapRevealKey, hold: !mapOpen)
-                        .frame(height: foldOffset == nil ? 180 : 240)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .strokeBorder(palette.border, lineWidth: 1)
-                        )
-                }
+                railMap
+                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey)
+                    .frame(height: foldOffset == nil ? 180 : 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(palette.border, lineWidth: 1)
+                    )
 
                 if selectedSample != nil || selectedLive != nil {
-                    paperUnfold(
-                        open: cardOpen,
-                        tilt: -13,
-                        scaleX: 0.90,
-                        scaleY: 0.96,
-                        minOpacity: 0.35,
-                        creaseOpacity: 0.12,
-                        cornerRadius: 20
-                    ) {
+                    Group {
                         if let sample = selectedSample {
                             FrostedGlassCard(
                                 palette: palette,
                                 seedKey: sample.id,
                                 salt: 29,
-                                rippleTrigger: railContextRipple,
                                 tapToRipple: true
                             ) {
                                 VStack(alignment: .leading, spacing: 10) {
@@ -977,7 +1010,6 @@ private struct FeedView: View {
                                 palette: palette,
                                 seedKey: live.id,
                                 salt: 37,
-                                rippleTrigger: railContextRipple,
                                 tapToRipple: true
                             ) {
                                 VStack(alignment: .leading, spacing: 10) {
@@ -1017,7 +1049,6 @@ private struct FeedView: View {
             .padding(.top, 8)
             .padding(.bottom, 20)
         }
-        .scrollClipDisabled()
         .background(palette.ground.ignoresSafeArea())
         .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
     }
@@ -1071,39 +1102,6 @@ private struct FeedView: View {
                 )
             }
         }
-    }
-
-    private func paperUnfold<Content: View>(
-        open: Bool,
-        tilt: Double,
-        scaleX: CGFloat,
-        scaleY: CGFloat,
-        minOpacity: Double,
-        creaseOpacity: Double,
-        cornerRadius: CGFloat,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            .overlay(alignment: .trailing) {
-                LinearGradient(
-                    colors: [.clear, palette.ink.opacity(open ? 0 : creaseOpacity)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: 44)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .offset(x: open ? 0 : 10)
-            .scaleEffect(x: open ? 1 : scaleX, y: open ? 1 : scaleY, anchor: .trailing)
-            .rotation3DEffect(
-                .degrees(open ? 0 : tilt),
-                axis: (x: 0, y: 1, z: 0),
-                anchor: .trailing,
-                perspective: 0.42
-            )
-            .opacity(open ? 1 : minOpacity)
     }
 
     private var railMap: some View {
