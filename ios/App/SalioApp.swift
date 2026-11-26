@@ -1053,38 +1053,44 @@ private struct FeedView: View {
             .opacity(open ? 1 : minOpacity)
     }
 
+    @ViewBuilder
     private var railMap: some View {
-        Map(position: $railCamera) {
-            if let live = selectedLive {
-                ForEach(search.results) { place in
-                    let isSelected = place.id == live.id
-                    Annotation(place.name, coordinate: place.coordinate) {
-                        Button {
-                            selection = .live(place.id)
-                        } label: {
-                            Image(systemName: "mappin.circle.fill")
-                                .font(isSelected ? .title2 : .body)
-                                .foregroundStyle(.white, isSelected ? palette.signal : palette.ink)
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
+        // Compact width never shows this column, so don't make MapKit load and draw a map offscreen.
+        if horizontalSizeClass == .compact {
+            Color.clear
+        } else {
+            Map(position: $railCamera) {
+                if let live = selectedLive {
+                    ForEach(search.results) { place in
+                        let isSelected = place.id == live.id
+                        Annotation(place.name, coordinate: place.coordinate) {
+                            Button {
+                                selection = .live(place.id)
+                            } label: {
+                                Image(systemName: "mappin.circle.fill")
+                                    .font(isSelected ? .title2 : .body)
+                                    .foregroundStyle(.white, isSelected ? palette.signal : palette.ink)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(place.name)
+                            .accessibilityIdentifier("rail-pin-\(place.id)")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(place.name)
-                        .accessibilityIdentifier("rail-pin-\(place.id)")
+                        .annotationTitles(.hidden)
+                    }
+                } else if let sample = selectedSample {
+                    Annotation(sample.name, coordinate: sample.coordinate) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white, palette.signal)
+                            .accessibilityHidden(true)
                     }
                     .annotationTitles(.hidden)
                 }
-            } else if let sample = selectedSample {
-                Annotation(sample.name, coordinate: sample.coordinate) {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.white, palette.signal)
-                        .accessibilityHidden(true)
-                }
-                .annotationTitles(.hidden)
             }
+            .mapStyle(.standard(pointsOfInterest: .excludingAll))
         }
-        .mapStyle(.standard(pointsOfInterest: .excludingAll))
     }
 
     private func contextMetricRow(_ label: String, value: String, valueColor: Color? = nil) -> some View {
