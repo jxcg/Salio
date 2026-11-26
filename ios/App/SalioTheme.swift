@@ -580,9 +580,9 @@ struct IndexMarker: View {
     }
 }
 
-/// Salio's first moment on a cold launch: a dot-matrix waveform that swells out of one line of dots,
-/// tipped with ASCII marks, while one refraction wave passes through before it fades into the feed.
-/// It never takes taps or blocks loading.
+/// Salio's first moment on a cold launch: ASCII characters burst out from the centre of the launch
+/// screen and tear it open onto the feed underneath, with no fade, so launch and feed read as one page.
+/// Each launch picks a shape and a colour mix at random, independently. It never takes taps or blocks loading.
 struct SalioOpening: View {
     let onFinish: () -> Void
 
@@ -591,11 +591,14 @@ struct SalioOpening: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.scenePhase) private var scenePhase
-    /// Set once the app is active, after iOS's launch zoom, so the wave rises where it can be seen.
+    /// Set once the app is active, after iOS's launch zoom, so the burst plays where it can be seen.
     @State private var start: Date?
     @State private var fading = false
+    /// The burst's shape and colour mix, picked once per launch and independent of each other.
+    @State private var pattern = OpeningBurst.Pattern.allCases.randomElement() ?? .starburst
+    @State private var mix = Int.random(in: 0..<OpeningBurst.mixes.count)
 
-    private static let wobble: TimeInterval = 0.7
+    private static let wobble: TimeInterval = 0.5
 
     private var animates: Bool {
         !reduceMotion && !voiceOver && contrast != .increased
@@ -609,12 +612,15 @@ struct SalioOpening: View {
                 let elapsed = start.map { max(timeline.date.timeIntervalSince($0), 0) } ?? 0
                 let t = min(elapsed / Self.wobble, 1)
                 let eased = 1 - pow(1 - t, 3)
-                ZStack {
-                    // Equatable, so the dim grid is drawn once and only the wave redraws each frame.
-                    OpeningGrid(dark: dark, showsField: contrast != .increased)
-                        .equatable()
-                    if contrast != .increased {
-                        OpeningWave(dark: dark, rise: animates ? eased : 1, time: animates ? elapsed : 0)
+                Group {
+                    if animates {
+                        OpeningBurst(
+                            dark: dark, pattern: pattern, mix: mix,
+                            front: OpeningBurst.front(elapsed) * hypot(size.width, size.height)
+                        )
+                    } else {
+                        OpeningGrid(dark: dark, showsField: contrast != .increased)
+                            .equatable()
                     }
                 }
                 .layerEffect(
@@ -639,19 +645,24 @@ struct SalioOpening: View {
         }
         .task(id: start) {
             guard start != nil else { return }
-            if animates { try? await Task.sleep(for: .milliseconds(550)) }
-            withAnimation(.easeOut(duration: 0.3)) { fading = true }
-            try? await Task.sleep(for: .milliseconds(320))
+            if animates {
+                // The burst has uncovered the whole feed by now, so the opening just leaves.
+                try? await Task.sleep(for: .seconds(OpeningBurst.duration))
+            } else {
+                withAnimation(.easeOut(duration: 0.2)) { fading = true }
+                try? await Task.sleep(for: .milliseconds(220))
+            }
             onFinish()
         }
     }
 }
 
-/// The opening's dot pitch, shared by the grid and the wave so their dots line up.
+/// The opening's cell pitch, shared by the grid and the burst so their cells line up.
 private let openingStep: CGFloat = 14
 
-/// The launch background with a faint dot grid. The opening's colours are the same for every theme,
-/// because the launch screen before it can't know the theme; they change only between light and dark.
+/// The launch background with a faint dot grid, the still opening under Reduce Motion, VoiceOver and
+/// Increase Contrast. The opening's colours are the same for every theme, because the launch screen
+/// before it can't know the theme; they change only between light and dark.
 private struct OpeningGrid: View, Equatable {
     let dark: Bool
     let showsField: Bool
@@ -675,72 +686,119 @@ private struct OpeningGrid: View, Equatable {
     }
 }
 
-/// A waveform of dots: each column's height breathes over time, dots swell towards the middle of the
-/// wave, a bright band runs along the centre line, the fringe shifts hue across the screen, and some
-/// peaks carry an amber, green or lavender mark.
-private struct OpeningWave: View {
+/// The launch screen as a grid of cells that ASCII characters burst across: a ragged front that is
+/// densest (`@ #`) and thins to `* + = - : .` behind it, in one of a few shapes. Its colour splits around
+/// the centre into one of a few mixes of Salio's colours, with a bright core at the front. Cells the front
+/// has passed are left empty, so the feed underneath shows through without a fade.
+struct OpeningBurst: View {
+    /// The front's shape. Each one maps a cell to how far the front must travel to reach it.
+    enum Pattern: CaseIterable {
+        /// A ragged ring with uneven spikes.
+        case starburst
+        /// A five-petal flower.
+        case bloom
+        /// A diamond, like a dot-matrix compass.
+        case diamond
+        /// Three arms that sweep round as they grow.
+        case pinwheel
+        /// A horizontal rift that splits open from the centre line, like the old waveform.
+        case rift
+
+        func distance(dx: CGFloat, dy: CGFloat, angle: CGFloat, diagonal: CGFloat) -> CGFloat {
+            switch self {
+            case .starburst:
+                hypot(dx, dy) / (1 + 0.1 * sin(angle * 7) + 0.06 * sin(angle * 13 + 1))
+            case .bloom:
+                hypot(dx, dy) / (1 + 0.2 * cos(angle * 5))
+            case .diamond:
+                (abs(dx) + abs(dy)) * 0.75
+            case .pinwheel:
+                hypot(dx, dy) + ((angle + .pi) / (2 * .pi) * 3).truncatingRemainder(dividingBy: 1) * diagonal * 0.1
+            case .rift:
+                abs(dy) * (1 + 0.25 * sin(dx / 23)) + abs(dx) * 0.25
+            }
+        }
+    }
+
+    /// The front as a fraction of the screen diagonal: fast out of the centre, easing near the corners.
+    static func front(_ elapsed: TimeInterval) -> CGFloat {
+        let p = min(elapsed / 0.8, 1)
+        return CGFloat(1 - (1 - p) * (1 - p)) * 0.85
+    }
+
+    /// Seconds until every cell is open, whatever the pattern.
+    static let duration: TimeInterval = 0.56
+
+    /// Three sector colours each, as (dark, light) pairs: prism, ember, and tide.
+    static let mixes: [[(UInt32, UInt32)]] = [
+        [(0x4CC38A, 0x1D8150), (0x9AA0F5, 0x5A55C8), (0xE69B42, 0xC87316)],
+        [(0xE69B42, 0xC87316), (0xE8805A, 0xC4562E), (0xB7AEDD, 0x6A5BB3)],
+        [(0x4CC38A, 0x1D8150), (0x9586E0, 0x7666C6), (0x9CA2B3, 0x5A5F6C)],
+    ]
+
     let dark: Bool
-    /// 0 is a single line of dots, 1 is the full wave.
-    let rise: Double
-    let time: TimeInterval
+    let pattern: Pattern
+    let mix: Int
+    /// How far in points the front has travelled from the centre, in the pattern's own distance.
+    let front: CGFloat
+
+    private static let ramp = ["@", "#", "*", "+", "=", "-", ":", "."]
 
     var body: some View {
-        // Centre to edge: core, light, body, fringe. In light mode the core is the darkest ink instead.
-        let bands = dark
-            ? [Color(hex: 0xE4E6FF), Color(hex: 0xB9BEFF), Color(hex: 0x8A93F7)]
-            : [Color(hex: 0x2E2A78), Color(hex: 0x4B47B8), Color(hex: 0x7C82E8)]
-        // The fringe splits like light through a prism: green, lavender, then amber across the screen.
-        let fringes = dark
-            ? [Color(hex: 0x3E9F74), Color(hex: 0x575DA8), Color(hex: 0xC4843A)]
-            : [Color(hex: 0x7CC4A0), Color(hex: 0xB4B7EA), Color(hex: 0xE8B579)]
-        let marks = dark
-            ? [Color(hex: 0xE69B42), Color(hex: 0x4CC38A), Color(hex: 0xB7AEDD)]
-            : [Color(hex: 0xC87316), Color(hex: 0x1D8150), Color(hex: 0x6A5BB3)]
+        let ground = Color(hex: dark ? 0x0B0C10 : 0xF2F3F6)
+        let gridDot = Color(hex: dark ? 0x2A2C38 : 0xD6D8E2)
+        let colors = [Color(hex: dark ? 0xE4E6FF : 0x2E2A78)]
+            + Self.mixes[mix].map { Color(hex: dark ? $0.0 : $0.1) }
         Canvas(rendersAsynchronously: false) { context, size in
-            let glyphs = zip(["+", ":", "*"], marks).map { glyph, color in
-                context.resolve(Text(glyph).font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundStyle(color))
+            // Resolved once per glyph and colour, then stamped into each cell.
+            let glyphs = colors.map { color in
+                Self.ramp.map { glyph in
+                    context.resolve(Text(glyph).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(color))
+                }
             }
+            let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+            let diagonal = hypot(size.width, size.height)
+            let thickness = diagonal * 0.22
             let columns = Int(size.width / openingStep)
-            let rows = Int(size.height / openingStep)
-            let centre = size.height / 2
-            let reach = size.height * 0.45
-            let colors = bands + fringes
-            var paths = [Path](repeating: Path(), count: colors.count)
+            var cover = Path(), dots = Path()
+            var marks: [(CGPoint, Int, Int)] = []
 
-            for col in 0...columns {
-                let x = CGFloat(col) * openingStep + openingStep / 2
-                let u = Double(x / size.width)
-                let h = RefractedReticleSurface.cellHash(row: 0, col: col, seed: 49)
-                // A bell across the screen, broken into uneven spikes that drift with time.
-                let bell = exp(-pow((u - 0.5) / 0.34, 2))
-                let spikes = 0.55 + 0.45 * sin(u * 19 + time * 2.2) * sin(u * 7.3 - time * 1.3)
-                let jitter = 0.82 + 0.18 * Double(h % 100) / 100
-                let height = 0.05 + rise * 0.95 * bell * spikes * jitter
-                let fringe = bands.count + min(Int(u * 3), 2)
+            for row in 0...Int(size.height / openingStep) {
+                let top = CGFloat(row) * openingStep
+                // Covered cells in a row join into one rectangle, so no seams show between them.
+                var run: CGFloat?
+                for col in 0...columns {
+                    let point = CGPoint(x: CGFloat(col) * openingStep + openingStep / 2, y: top + openingStep / 2)
+                    let dx = point.x - centre.x, dy = point.y - centre.y
+                    let angle = atan2(dy, dx)
+                    let h = RefractedReticleSurface.cellHash(row: row, col: col, seed: 49)
+                    // A little per-cell jitter makes every shape's front ragged, like debris.
+                    let reach = front + CGFloat(h % 100) / 100 * openingStep * 1.5
+                    let behind = (reach - pattern.distance(dx: dx, dy: dy, angle: angle, diagonal: diagonal)) / thickness
 
-                for row in 0...rows {
-                    let y = CGFloat(row) * openingStep + openingStep / 2
-                    let dy = Double(abs(y - centre) / reach)
-                    guard dy < height else { continue }
-                    let inside = 1 - dy / height
-                    let radius = openingStep * 0.33 * CGFloat(0.35 + 0.65 * min(inside * 2.5, 1))
-                    let band = inside < 0.16 ? fringe : dy < 0.09 ? 0 : dy < 0.2 ? 1 : 2
-                    paths[band].addEllipse(in: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
+                    if behind < 0.35 {
+                        dots.addEllipse(in: CGRect(x: point.x - 1.2, y: point.y - 1.2, width: 2.4, height: 2.4))
+                        if run == nil { run = CGFloat(col) * openingStep }
+                    } else if let start = run {
+                        cover.addRect(CGRect(x: start, y: top, width: CGFloat(col) * openingStep - start, height: openingStep))
+                        run = nil
+                    }
+                    // A short trail runs on over the feed, so the characters lead straight into it.
+                    if behind > 0, behind < 0.7, Double((h >> 8) % 1000) / 1000 > Double(behind) * 0.9 {
+                        let level = min(Int(behind / 0.7 * CGFloat(Self.ramp.count)), Self.ramp.count - 1)
+                        // Hue follows the angle, with jittered edges so the sectors blend.
+                        let turn = (Double(angle) + .pi) / (2 * .pi) * 3 + Double((h >> 20) % 100) / 250
+                        marks.append((point, level < 2 ? 0 : 1 + Int(turn) % 3, level))
+                    }
                 }
-
-                // ASCII tips on every few peaks, once the wave has opened.
-                if rise > 0.5, height > 0.3, h % 4 == 0 {
-                    let tip = CGFloat(height) * reach + openingStep * 1.2
-                    var mark = context
-                    mark.opacity = (rise - 0.5) * 2
-                    let glyph = glyphs[Int((h >> 8) % UInt64(glyphs.count))]
-                    mark.draw(glyph, at: CGPoint(x: x, y: centre - tip), anchor: .center)
-                    mark.draw(glyph, at: CGPoint(x: x, y: centre + tip), anchor: .center)
+                if let start = run {
+                    cover.addRect(CGRect(x: start, y: top, width: CGFloat(columns + 1) * openingStep - start, height: openingStep))
                 }
             }
-            // Fringes first, core last, so the brighter dots sit on top where they overlap.
-            for (path, color) in zip(paths, colors).reversed() {
-                context.fill(path, with: .color(color))
+            context.fill(cover, with: .color(ground))
+            context.fill(dots, with: .color(gridDot))
+            for (point, color, level) in marks {
+                context.draw(glyphs[color][level], at: point, anchor: .center)
             }
         }
     }
