@@ -78,7 +78,7 @@ struct AsciiReveal: View {
         hashes.reserveCapacity(rows * columns)
         for row in 0..<rows {
             for col in 0..<columns {
-                let p = point(row, col), hash = RefractedReticleSurface.cellHash(row: row, col: col, seed: 0)
+                let p = point(row, col), hash = Self.hash(row: row, col: col)
                 let jitter = Double(hash % 100) / 100 * 1.5 * cell / diagonal
                 reach.append(shape.distance((p.x - centre.x) / diagonal, (p.y - centre.y) / diagonal) + jitter)
                 hashes.append(hash)
@@ -120,6 +120,16 @@ struct AsciiReveal: View {
         for (ink, color) in zip(inks, [core] + accents) {
             context.fill(ink, with: .color(color))
         }
+    }
+
+    /// A stable pseudo-random number per cell (SplitMix64), so the ragged edge and trail never flicker.
+    private static func hash(row: Int, col: Int) -> UInt64 {
+        var h = UInt64(bitPattern: Int64(row &* 73_856_093 ^ col &* 19_349_663))
+        h ^= h >> 30
+        h &*= 0xBF58_476D_1CE4_E5B9
+        h ^= h >> 27
+        h &*= 0x94D0_49BB_1331_11EB
+        return h ^ (h >> 31)
     }
 
     /// Which accent a cell takes, by its angle around the centre, with jittered edges so sectors blend.

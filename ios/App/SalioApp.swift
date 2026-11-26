@@ -20,9 +20,11 @@ struct SalioApp: App {
                 feedFound = found
                 feedReady = true
             }
-                .overlay {
-                    if showsOpening { SalioOpening(ready: feedReady, found: feedFound) { showsOpening = false } }
+            .overlay {
+                if showsOpening {
+                    SalioOpening(ready: feedReady, found: feedFound) { showsOpening = false }
                 }
+            }
         }
     }
 

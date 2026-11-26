@@ -22,7 +22,8 @@ static half sampleFrostedChannel(SwiftUI::Layer layer, float2 p, float blur, int
     float radius,
     float bandWidth,
     float strength,
-    float blurRadius
+    float blurRadius,
+    float dispersion
 ) {
     float2 delta = position - origin;
     float dist = length(delta);
@@ -37,9 +38,10 @@ static half sampleFrostedChannel(SwiftUI::Layer layer, float2 p, float blur, int
     float blur = wave * blurRadius;
 
     // Natural optical dispersion: R bends slightly less than G, B bends slightly more.
-    half r = sampleFrostedChannel(layer, position - offset * 0.72f, blur, 0);
+    // `dispersion` scales the split, where 1 is a gentle fringe.
+    half r = sampleFrostedChannel(layer, position - offset * (1.0f - 0.28f * dispersion), blur, 0);
     half g = sampleFrostedChannel(layer, position - offset, blur, 1);
-    half b = sampleFrostedChannel(layer, position - offset * 1.30f, blur, 2);
+    half b = sampleFrostedChannel(layer, position - offset * (1.0f + 0.30f * dispersion), blur, 2);
     half a = layer.sample(position).a;
 
     half glaze = half(wave * 0.045f);

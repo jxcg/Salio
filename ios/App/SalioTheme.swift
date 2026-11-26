@@ -173,7 +173,8 @@ struct RefractedReticleSurface: View {
                             .float(Float(eased * maxRadius)),
                             .float(34),
                             .float(strength),
-                            .float(2.6)
+                            .float(2.6),
+                            .float(1)
                         ),
                         maxSampleOffset: CGSize(width: 20, height: 20),
                         isEnabled: active
@@ -241,7 +242,7 @@ struct RefractedReticleSurface: View {
         key.unicodeScalars.reduce(salt) { $0 &* 31 &+ Int($1.value) }
     }
 
-    static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
+    private static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
         var h = UInt64(bitPattern: Int64(row &* 73_856_093 ^ col &* 19_349_663 ^ seed &* 83_492_791))
         h ^= h >> 30
         h &*= 0xBF58_476D_1CE4_E5B9
@@ -641,7 +642,11 @@ struct SalioOpening: View {
     }
 
     var body: some View {
+        // Colours are worked out once here, so each frame only computes progress.
         let dark = colorScheme == .dark
+        let dots = Color(hex: dark ? 0x2A2C38 : 0xD6D8E2)
+        let core = Color(hex: dark ? 0xE4E6FF : 0x2E2A78)
+        let inks = accents.map { Color(hex: dark ? $0.dark : $0.light) }
         TimelineView(.animation(paused: !animates || start == nil)) { timeline in
             let progress = start.map { progress(at: timeline.date, from: $0) } ?? 0
             if animates {
@@ -649,9 +654,9 @@ struct SalioOpening: View {
                     progress: progress,
                     shape: shape,
                     cover: Color("LaunchBackground"),
-                    dots: Color(hex: dark ? 0x2A2C38 : 0xD6D8E2),
-                    core: Color(hex: dark ? 0xE4E6FF : 0x2E2A78),
-                    accents: accents.map { Color(hex: dark ? $0.dark : $0.light) },
+                    dots: dots,
+                    core: core,
+                    accents: inks,
                     opens: tears
                 )
                 .visualEffect { content, proxy in
@@ -662,7 +667,9 @@ struct SalioOpening: View {
                             .float((1 - pow(1 - progress, 3)) * reach * 0.62),
                             .float(64),
                             .float(sin(progress * .pi) * 0.85),
-                            .float(1.8)
+                            .float(1.8),
+                            // A stronger colour split than the cards' ripple, so the pulse reads as glass.
+                            .float(1.6)
                         ),
                         maxSampleOffset: CGSize(width: 20, height: 20),
                         isEnabled: progress > 0 && progress < 1
