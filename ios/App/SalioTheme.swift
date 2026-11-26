@@ -723,7 +723,7 @@ private struct OpeningWave: View {
                     let dy = Double(abs(y - centre) / reach)
                     guard dy < height else { continue }
                     let inside = 1 - dy / height
-                    let radius = openingStep * 0.47 * CGFloat(0.4 + 0.6 * min(inside * 3, 1))
+                    let radius = openingStep * 0.33 * CGFloat(0.35 + 0.65 * min(inside * 2.5, 1))
                     let band = inside < 0.16 ? fringe : dy < 0.09 ? 0 : dy < 0.2 ? 1 : 2
                     paths[band].addEllipse(in: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
                 }
