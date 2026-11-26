@@ -1,0 +1,6 @@
+// Placeholder bundle ID so Salio builds and runs in the Simulator straight from Xcode.
+// To run on your own device, put `SALIO_BUNDLE_ID = <your ID>` in ios/Local.xcconfig (git-ignored).
+// A `SALIO_BUNDLE_ID=` passed to xcodebuild still wins.
+SALIO_BUNDLE_ID = org.example.salio
+
+#include? "Local.xcconfig"
