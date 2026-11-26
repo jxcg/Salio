@@ -588,6 +588,18 @@ struct IndexMarker: View {
 /// Its colours follow light and dark but not the theme, because the launch screen before it can't know
 /// the theme. Under Reduce Motion, VoiceOver or Increase Contrast, the launch colour simply fades.
 struct SalioOpening: View {
+    /// How the opening hands over to a feed that is ready. While the feed is still loading, both fade.
+    enum Style: String, CaseIterable, Identifiable {
+        /// The burst tears the launch screen open onto the results.
+        case tear
+        /// The burst runs across the closed launch screen, which then fades onto the results.
+        case fade
+
+        var id: String { rawValue }
+        var displayName: String { self == .tear ? "Tear open" : "Burst and fade" }
+        static var storageKey: String { SalioTestStore.scopedKey("salioOpeningStyle") }
+    }
+
     /// Whether the feed has finished its first load, so there is something worth uncovering.
     let ready: Bool
     let onFinish: () -> Void
@@ -597,6 +609,7 @@ struct SalioOpening: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(Style.storageKey) private var style: Style = .tear
     /// Set once the app is active, after iOS's launch zoom, so the reveal plays where it can be seen.
     @State private var start: Date?
     /// When the ring was released: the feed became ready, `maxWait` passed, or someone tapped.
@@ -668,7 +681,7 @@ struct SalioOpening: View {
         }
         .onChange(of: ready, initial: true) {
             guard ready, releasedAt == nil else { return }
-            tears = true
+            tears = style == .tear
             releasedAt = .now
         }
         .task(id: [start, releasedAt]) {
