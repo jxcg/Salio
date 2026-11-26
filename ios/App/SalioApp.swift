@@ -342,9 +342,7 @@ private struct FeedView: View {
     @State private var railCamera: MapCameraPosition = .automatic
     @State private var featuredCardRipple = 0
     @State private var mapCardRipple = 0
-    @State private var railContextRipple = 0
-    @State private var railMapSettled = true
-    @State private var railCardSettled = true
+    @State private var railSettled = true
     @State private var compactFeedWidth: CGFloat?
     /// Width from the window's leading edge to the Duo fold, so the inner display splits like an open book.
     @State private var foldOffset: CGFloat?
@@ -381,7 +379,7 @@ private struct FeedView: View {
         if #available(iOS 27.1, *) {
             splitView
                 .background { HingeReader { hingePose = $0 } }
-                .task(id: hingePose) { await settleRail(for: hingePose) }
+                .onChange(of: hingePose, initial: true) { settleRail(for: hingePose) }
         } else {
             splitView
         }
@@ -395,8 +393,19 @@ private struct FeedView: View {
             if let foldOffset {
                 // Open Duo: two pages meet at the fold, and the right page keeps the cover's feed.
                 HStack(spacing: 0) {
+                    let frosted = !railSettled && allowsUnfoldMotion
                     NavigationStack {
                         placeContext.navigationBarTitleDisplayMode(.inline)
+                    }
+                    .accessibilityHidden(frosted)
+                    // One frosted layer over the whole left page, title and map included, while the hinge moves.
+                    .overlay {
+                        Rectangle()
+                            .fill(.thinMaterial)
+                            .opacity(frosted ? 1 : 0)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(frosted)
+                            .accessibilityHidden(true)
                     }
                     .frame(width: foldOffset)
                     NavigationStack { feedPage }
@@ -879,45 +888,24 @@ private struct FeedView: View {
     }
 
     private var placeContext: some View {
-        let mapOpen = railMapSettled || !allowsUnfoldMotion
-        let cardOpen = railCardSettled || !allowsUnfoldMotion
-        return ScrollView {
+        ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                paperUnfold(
-                    open: mapOpen,
-                    tilt: -11,
-                    scaleX: 0.92,
-                    scaleY: 0.97,
-                    minOpacity: 0.45,
-                    creaseOpacity: 0.10,
-                    cornerRadius: 18
-                ) {
-                    railMap
-                        .mapBlurReveal(palette: palette, trigger: railMapRevealKey, hold: !mapOpen)
-                        .frame(height: foldOffset == nil ? 180 : 240)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .strokeBorder(palette.border, lineWidth: 1)
-                        )
-                }
+                railMap
+                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey)
+                    .frame(height: foldOffset == nil ? 180 : 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(palette.border, lineWidth: 1)
+                    )
 
                 if selectedSample != nil || selectedLive != nil {
-                    paperUnfold(
-                        open: cardOpen,
-                        tilt: -13,
-                        scaleX: 0.90,
-                        scaleY: 0.96,
-                        minOpacity: 0.35,
-                        creaseOpacity: 0.12,
-                        cornerRadius: 20
-                    ) {
+                    Group {
                         if let sample = selectedSample {
                             FrostedGlassCard(
                                 palette: palette,
                                 seedKey: sample.id,
                                 salt: 29,
-                                rippleTrigger: railContextRipple,
                                 tapToRipple: true
                             ) {
                                 VStack(alignment: .leading, spacing: 10) {
@@ -955,7 +943,6 @@ private struct FeedView: View {
                                 palette: palette,
                                 seedKey: live.id,
                                 salt: 37,
-                                rippleTrigger: railContextRipple,
                                 tapToRipple: true
                             ) {
                                 VStack(alignment: .leading, spacing: 10) {
@@ -1052,81 +1039,17 @@ private struct FeedView: View {
         }
     }
 
-    /// Keeps the left page tucked under its blur while the Duo is closed or the hinge is moving,
-    /// and unfolds it once the hinge comes to rest open, partial or full. A new pose cancels this.
-    private func settleRail(for pose: HingePose) async {
+    /// Keeps the left page frosted while the Duo is closed or the hinge is moving,
+    /// and clears it once the hinge comes to rest open, partial or full.
+    private func settleRail(for pose: HingePose) {
         switch pose {
-        case .closed:
-            if allowsUnfoldMotion {
-                railMapSettled = false
-                railCardSettled = false
-            }
-        case .moving:
-            guard allowsUnfoldMotion else { return }
-            withAnimation(.easeOut(duration: 0.2)) {
-                railMapSettled = false
-                railCardSettled = false
-            }
-        case .unknown:
-            railMapSettled = true
-            railCardSettled = true
-        case .open:
-            guard !(railMapSettled && railCardSettled) else { return }
-            guard allowsUnfoldMotion else {
-                railMapSettled = true
-                railCardSettled = true
-                return
-            }
-            do {
-                if !railMapSettled {
-                    withAnimation(.spring(response: 0.52, dampingFraction: 0.72)) {
-                        railMapSettled = true
-                    }
-                    try await Task.sleep(for: .milliseconds(110))
-                }
-                withAnimation(.spring(response: 0.58, dampingFraction: 0.70)) {
-                    railCardSettled = true
-                }
-                try await Task.sleep(for: .milliseconds(110))
-                railContextRipple += 1
-            } catch {
-                // The hinge moved again; the task for the new pose takes over.
-            }
+        case .closed, .moving:
+            guard allowsUnfoldMotion, railSettled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { railSettled = false }
+        case .open, .unknown:
+            guard !railSettled else { return }
+            withAnimation(allowsUnfoldMotion ? .easeInOut(duration: 0.35) : nil) { railSettled = true }
         }
-    }
-
-    private func paperUnfold<Content: View>(
-        open: Bool,
-        tilt: Double,
-        scaleX: CGFloat,
-        scaleY: CGFloat,
-        minOpacity: Double,
-        creaseOpacity: Double,
-        cornerRadius: CGFloat,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            .overlay(alignment: .trailing) {
-                LinearGradient(
-                    colors: [.clear, palette.ink.opacity(open ? 0 : creaseOpacity)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: 44)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .offset(x: open ? 0 : 10)
-            .scaleEffect(x: open ? 1 : scaleX, y: open ? 1 : scaleY, anchor: .trailing)
-            .rotation3DEffect(
-                .degrees(open ? 0 : tilt),
-                axis: (x: 0, y: 1, z: 0),
-                anchor: .trailing,
-                perspective: 0.42
-            )
-            .opacity(open ? 1 : minOpacity)
-            .accessibilityHidden(!open)
     }
 
     private var railMap: some View {
