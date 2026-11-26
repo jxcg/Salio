@@ -362,14 +362,8 @@ struct FrostedGlassCard<Content: View>: View {
 }
 
 struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
-    private struct TaskKey: Equatable {
-        let trigger: Trigger
-        let hold: Bool
-    }
-
     let palette: SalioPalette
     let trigger: Trigger
-    let hold: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -384,9 +378,8 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        let holding = allowsReveal && hold
-        TimelineView(.animation(paused: !(isRevealing && allowsReveal && !holding))) { timeline in
-            let progress: Double? = holding ? 0 : (isRevealing ? revealProgress(at: timeline.date) : nil)
+        TimelineView(.animation(paused: !(isRevealing && allowsReveal))) { timeline in
+            let progress: Double? = isRevealing ? revealProgress(at: timeline.date) : nil
             let active = allowsReveal && progress != nil
             let t = progress ?? 1
             let ease = 1 - pow(1 - t, 3)
@@ -406,8 +399,8 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
                     }
                 }
         }
-        .task(id: TaskKey(trigger: trigger, hold: hold)) {
-            guard allowsReveal, !hold else {
+        .task(id: trigger) {
+            guard allowsReveal else {
                 isRevealing = false
                 revealStart = nil
                 return
@@ -464,10 +457,9 @@ private struct AsciiVeil: View, Equatable {
 extension View {
     func mapBlurReveal<Trigger: Equatable>(
         palette: SalioPalette,
-        trigger: Trigger,
-        hold: Bool = false
+        trigger: Trigger
     ) -> some View {
-        modifier(MapBlurRevealModifier(palette: palette, trigger: trigger, hold: hold))
+        modifier(MapBlurRevealModifier(palette: palette, trigger: trigger))
     }
 }
 
@@ -554,5 +546,36 @@ struct DotLeader: View {
             .clipped()
             .font(.system(.caption, design: .monospaced))
             .accessibilityHidden(true)
+    }
+}
+
+/// Marks a Nearby row with the same number as its map pin, like an atlas index.
+/// Unselected is an ink outline; selected fills with the signal colour.
+struct IndexMarker: View {
+    var number: Int?
+    var symbol: String?
+    let selected: Bool
+    let palette: SalioPalette
+    var size: CGFloat = 28
+
+    var body: some View {
+        Group {
+            if let number {
+                Text("\(number)")
+                    .font(.system(size: size * 0.46, weight: .semibold, design: .monospaced))
+            } else if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: size * 0.6, weight: .medium))
+            }
+        }
+        .foregroundStyle(selected ? palette.onCTA : (number == nil ? palette.leaveBy : palette.ink))
+        .frame(width: size, height: size)
+        .background(Circle().fill(selected ? palette.signal : (number == nil ? .clear : palette.card)))
+        .overlay {
+            if number != nil {
+                Circle().strokeBorder(selected ? palette.signal : palette.ink, lineWidth: 1.5)
+            }
+        }
+        .accessibilityHidden(true)
     }
 }

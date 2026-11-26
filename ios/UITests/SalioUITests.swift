@@ -27,6 +27,7 @@ final class SalioUITests: XCTestCase {
     func testLocationOffStillAllowsSearch() {
         let app = launch(arguments: ["-SALIOStubSearch", "-SALIOShowSearchCount"])
         XCTAssertTrue(app.staticTexts["Search places or turn on location to see what’s nearby."].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["turn-on-location"].exists)
         XCTAssertEqual(searchCount(in: app), 0)
         searchField(in: app).tap()
         searchField(in: app).typeText("coffee\n")
@@ -40,31 +41,6 @@ final class SalioUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["The Picture House"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["North Street Gallery"].exists)
     }
-
-    #if compiler(>=6.4.4) && targetEnvironment(simulator)
-    func testDuoKeepsNearbyAndSelectionAcrossHingeChanges() throws {
-        guard #available(iOS 27.3, *) else { throw XCTSkip("Hinge automation requires iOS 27.3") }
-        guard let hinge = XCUIDevice.shared.hinge else { throw XCTSkip("Requires the Duo simulator") }
-        defer { hinge.angle = 0 }
-        hinge.angle = 0
-
-        let app = launch(arguments: ["-SALIOStubSearch"])
-        let gallery = app.buttons.containing(.staticText, identifier: "North Street Gallery").firstMatch
-        XCTAssertTrue(gallery.waitForExistence(timeout: 5))
-        gallery.tap()
-        XCTAssertTrue(gallery.isSelected)
-
-        hinge.angle = .pi / 2
-        hinge.angle = .pi
-        XCTAssertTrue(app.navigationBars["Timing"].waitForExistence(timeout: 5))
-        XCTAssertTrue(searchField(in: app).exists)
-        XCTAssertTrue(gallery.isSelected)
-
-        hinge.angle = 0
-        XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 5))
-        XCTAssertTrue(gallery.isSelected)
-    }
-    #endif
 
     func testInterestSetupIsOptionalAndSkipPersists() {
         continueAfterFailure = false

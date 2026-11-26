@@ -63,6 +63,42 @@ struct LivePlace: Identifiable, Equatable {
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
+
+    /// Category and street, such as "Café · 22 Frith Street", instead of the full postal address.
+    var summary: String {
+        let street = address.split(separator: ",").first.map { $0.trimmingCharacters(in: .whitespaces) }
+        return [category?.displayName, street].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// Straight-line distance, worked out on the device.
+    func distance(from center: CLLocationCoordinate2D) -> CLLocationDistance {
+        CLLocation(latitude: latitude, longitude: longitude)
+            .distance(from: CLLocation(latitude: center.latitude, longitude: center.longitude))
+    }
+}
+
+extension MKPointOfInterestCategory {
+    var displayName: String? {
+        switch self {
+        case .cafe: "Café"
+        case .bakery: "Bakery"
+        case .restaurant: "Restaurant"
+        case .brewery: "Brewery"
+        case .nightlife: "Nightlife"
+        case .foodMarket: "Food market"
+        case .museum: "Museum"
+        case .movieTheater: "Cinema"
+        case .theater: "Theatre"
+        case .musicVenue: "Music venue"
+        case .landmark: "Landmark"
+        case .park: "Park"
+        case .beach: "Beach"
+        case .zoo: "Zoo"
+        case .aquarium: "Aquarium"
+        case .amusementPark: "Theme park"
+        default: nil
+        }
+    }
 }
 
 enum PlaceRequest: Sendable {
@@ -161,6 +197,7 @@ final class SearchModel {
 
     private let searcher: any PlaceSearching
     private var rawNearbyResults: [LivePlace] = []
+    private var nearbyCenter: CLLocationCoordinate2D?
 
     init(searcher: any PlaceSearching) {
         self.searcher = searcher
@@ -173,12 +210,13 @@ final class SearchModel {
     }
 
     func loadNearby(near center: CLLocationCoordinate2D, matching interests: [String]) async {
+        nearbyCenter = center
         await load(.nearby(center), nearby: true, interests: interests)
     }
 
     func reprioritize(for interests: [String]) {
         guard isNearbyResults else { return }
-        results = Self.prioritized(rawNearbyResults, for: interests)
+        results = Self.prioritized(rawNearbyResults, for: interests, near: nearbyCenter)
     }
 
     func matchReason(for place: LivePlace, interests: [String]) -> String? {
@@ -195,7 +233,7 @@ final class SearchModel {
             let places = try await searcher.search(request)
             isNearbyResults = nearby
             rawNearbyResults = nearby ? places : []
-            results = nearby ? Self.prioritized(places, for: interests) : places
+            results = nearby ? Self.prioritized(places, for: interests, near: nearbyCenter) : places
             status = results.isEmpty ? .empty : .results
         } catch {
             isNearbyResults = false
@@ -205,11 +243,19 @@ final class SearchModel {
         }
     }
 
-    private static func prioritized(_ places: [LivePlace], for interests: [String]) -> [LivePlace] {
-        guard !interests.isEmpty else { return places }
+    /// Interest matches first, and each group nearest first.
+    private static func prioritized(
+        _ places: [LivePlace],
+        for interests: [String],
+        near center: CLLocationCoordinate2D?
+    ) -> [LivePlace] {
+        let ordered = center.map { center in
+            places.sorted { $0.distance(from: center) < $1.distance(from: center) }
+        } ?? places
+        guard !interests.isEmpty else { return ordered }
         var matches: [LivePlace] = []
         var others: [LivePlace] = []
-        for place in places {
+        for place in ordered {
             if Preferences.matchingInterest(for: place.category, in: interests) != nil {
                 matches.append(place)
             } else {
@@ -234,6 +280,86 @@ final class SearchModel {
     }
 }
 
+#if compiler(>=6.4.2)
+/// Reads the hinge angle from UIKit, which SwiftUI's `onHingeChange` doesn't expose, and turns how fast
+/// it's moving into how frosted the Duo's left page should be: 0 is clear, 1 is fully frosted.
+@available(iOS 27.1, *)
+private struct HingeReader: UIViewRepresentable {
+    /// Called with the frost amount and the animation to reach it.
+    let onFrost: (Double, Animation) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        let coordinator = context.coordinator
+        view.addInteraction(UIHingeInteraction { _, update in
+            MainActor.assumeIsolated { coordinator.update(update.hinge) }
+        })
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.onFrost = onFrost
+    }
+
+    @MainActor
+    final class Coordinator {
+        /// How long the angle must hold still before the frost clears.
+        static let restDelay: Duration = .milliseconds(200)
+        /// Angle changes under about half a degree are sensor noise, not motion.
+        static let jitter: CGFloat = 0.009
+        /// Hinge speed that frosts the page fully, in radians a second (about 115° a second).
+        static let fullFrostSpeed = 2.0
+
+        var onFrost: (Double, Animation) -> Void = { _, _ in }
+        private var lastMove: (angle: CGFloat, time: ContinuousClock.Instant)?
+        private var speed = 0.0
+        private var rest: Task<Void, Never>?
+
+        func update(_ hinge: UIHinge?) {
+            guard let hinge, hinge.status != .closed else {
+                stop()
+                onFrost(hinge == nil ? 0 : 1, .easeOut(duration: 0.2))
+                return
+            }
+            let now = ContinuousClock.now
+            guard let lastMove else {
+                lastMove = (hinge.angle, now)
+                clearWhenStill()
+                return
+            }
+            // Measure from the last real move, so slow turns add up past the noise threshold.
+            let delta = abs(hinge.angle - lastMove.angle)
+            guard delta > Self.jitter else { return }
+            let elapsed = now - lastMove.time
+            let seconds = max(Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18, 1 / 120)
+            speed = speed * 0.5 + Double(delta) / seconds * 0.5
+            self.lastMove = (hinge.angle, now)
+            onFrost(min(1, speed / Self.fullFrostSpeed), .linear(duration: 0.12))
+            clearWhenStill()
+        }
+
+        private func clearWhenStill() {
+            rest?.cancel()
+            rest = Task { [weak self] in
+                try? await Task.sleep(for: Self.restDelay)
+                guard let self, !Task.isCancelled else { return }
+                speed = 0
+                onFrost(0, .easeInOut(duration: 0.35))
+            }
+        }
+
+        private func stop() {
+            rest?.cancel()
+            lastMove = nil
+            speed = 0
+        }
+    }
+}
+#endif
+
 private enum Selection: Hashable {
     case sample(FeedEntry.ID)
     case live(LivePlace.ID)
@@ -252,11 +378,11 @@ private struct FeedView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.openURL) private var openURL
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
-    @State private var wasClosed = false
     @State private var profileSheet: ProfileSheet?
     @AppStorage(SalioTestStore.scopedKey("finishedInterestSetup")) private var finishedInterestSetup = false
     @State private var activeInterests: [String] = []
@@ -268,10 +394,8 @@ private struct FeedView: View {
     @State private var railCamera: MapCameraPosition = .automatic
     @State private var featuredCardRipple = 0
     @State private var mapCardRipple = 0
-    @State private var railContextRipple = 0
-    @State private var unfoldCount = 0
-    @State private var railMapSettled = true
-    @State private var railCardSettled = true
+    /// How frosted the Duo's left page is, from 0 (clear) to 1, following how fast the hinge moves.
+    @State private var railFrost = 0.0
     @State private var compactFeedWidth: CGFloat?
     /// Width from the window's leading edge to the Duo fold, so the inner display splits like an open book.
     @State private var foldOffset: CGFloat?
@@ -306,50 +430,12 @@ private struct FeedView: View {
         // Build without hinge support on toolchains that predate the Duo SDK.
         #if compiler(>=6.4.2)
         if #available(iOS 27.1, *) {
-            splitView.onHingeChange { old, new in
-                let status = new.hinge?.status
-                guard old.hinge?.status != status else { return }
-                let didUnfold = status == .fullyOpen && wasClosed && allowsUnfoldMotion
-                if status == .closed {
-                    wasClosed = true
-                    if allowsUnfoldMotion {
-                        railMapSettled = false
-                        railCardSettled = false
+            splitView
+                .background {
+                    HingeReader { frost, animation in
+                        withAnimation(animation) { railFrost = frost }
                     }
-                } else if didUnfold {
-                    railMapSettled = false
-                    railCardSettled = false
-                    unfoldCount += 1
-                    wasClosed = false
-                } else if status == .fullyOpen || status == nil {
-                    wasClosed = false
-                    railMapSettled = true
-                    railCardSettled = true
                 }
-            }
-            .task(id: unfoldCount) {
-                guard unfoldCount > 0, allowsUnfoldMotion else {
-                    railMapSettled = true
-                    railCardSettled = true
-                    return
-                }
-                do {
-                    // Let the inner Duo display reach full brightness before unfolding the rail.
-                    try await Task.sleep(for: .milliseconds(180))
-                    withAnimation(.spring(response: 0.52, dampingFraction: 0.72)) {
-                        railMapSettled = true
-                    }
-                    try await Task.sleep(for: .milliseconds(110))
-                    withAnimation(.spring(response: 0.58, dampingFraction: 0.70)) {
-                        railCardSettled = true
-                    }
-                    try await Task.sleep(for: .milliseconds(110))
-                    railContextRipple += 1
-                } catch {
-                    railMapSettled = true
-                    railCardSettled = true
-                }
-            }
         } else {
             splitView
         }
@@ -363,10 +449,25 @@ private struct FeedView: View {
             if let foldOffset {
                 // Open Duo: two pages meet at the fold, and the right page keeps the cover's feed.
                 HStack(spacing: 0) {
+                    let frost = allowsUnfoldMotion ? railFrost : 0
+                    let frosted = frost > 0.05
                     NavigationStack {
                         placeContext.navigationBarTitleDisplayMode(.inline)
                     }
+                    .accessibilityHidden(frosted)
+                    // One frosted layer over the whole left page, title and map included, as thick as the hinge is fast.
+                    .overlay {
+                        Rectangle()
+                            .fill(.thinMaterial)
+                            .opacity(frost)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(frosted)
+                            .accessibilityHidden(true)
+                    }
                     .frame(width: foldOffset)
+                    // Nothing on the left page, ASCII veil included, may draw past the fold while folding.
+                    // The mask runs full height so the page can still reach under the status bar.
+                    .mask { Rectangle().ignoresSafeArea(edges: .vertical) }
                     NavigationStack { feedPage }
                 }
                 .overlay(alignment: .topLeading) {
@@ -434,12 +535,7 @@ private struct FeedView: View {
                                 rippleTrigger: mapCardRipple,
                                 tapToRipple: true
                             ) {
-                                featuredPlaceContent(
-                                    title: place.name,
-                                    subtitle: place.address,
-                                    reason: search.matchReason(for: place, interests: activeInterests),
-                                    selected: true
-                                )
+                                livePlaceContent(place, featured: true)
                             }
                             .padding(.horizontal, 16)
                             .padding(.bottom, 8)
@@ -605,18 +701,14 @@ private struct FeedView: View {
 
     private var placesMap: some View {
         Map(position: $camera) {
-            ForEach(search.results) { place in
+            ForEach(Array(search.results.enumerated()), id: \.element.id) { index, place in
                 let selected = selection == .live(place.id)
-                let color: Color = selected ? palette.signal : palette.ink
                 Annotation(place.name, coordinate: place.coordinate) {
                     Button {
                         selection = .live(place.id)
                         mapCardRipple += 1
                     } label: {
-                        Image(systemName: "mappin.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.white, color)
-                            .frame(width: 44, height: 44)
+                        mapPin(number: index + 1, selected: selected, size: 30)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -642,9 +734,22 @@ private struct FeedView: View {
                         words: ["Getting our bearings…", "Consulting the compass…", "Squinting at maps…", "Sniffing the wind…"]
                     )
                 } else {
-                    Text("Search places or turn on location to see what’s nearby.")
-                        .font(.subheadline)
-                        .foregroundStyle(palette.muted)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Search places or turn on location to see what’s nearby.")
+                            .font(.subheadline)
+                            .foregroundStyle(palette.muted)
+                        // By now Salio has already asked for location, so only Settings can turn it on.
+                        if didLocate, center == nil, let settings = URL(string: UIApplication.openSettingsURLString) {
+                            Button("Turn on location") { openURL(settings) }
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(palette.onCTA)
+                                .padding(.horizontal, 16)
+                                .frame(minHeight: 44)
+                                .background(palette.ink, in: Capsule())
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("turn-on-location")
+                        }
+                    }
                 }
             }
         case .searching:
@@ -724,15 +829,35 @@ private struct FeedView: View {
 
     private func sampleRow(_ entry: FeedEntry) -> some View {
         let selected = selectedSample?.id == entry.id
+        let leaveBy = entry.leaveBy.formatted(date: .omitted, time: .shortened)
         return Button {
             selection = .sample(entry.id)
         } label: {
-            rowLabel(
-                title: entry.name,
-                subtitle: "\(entry.category) · \(entry.walkMinutes) min walk",
-                leaveBy: entry.leaveBy,
-                selected: selected
-            )
+            HStack(spacing: 12) {
+                IndexMarker(symbol: "clock", selected: selected, palette: palette)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.name)
+                        .font(.headline)
+                        .foregroundStyle(palette.ink)
+                    Text("\(entry.category) · \(entry.walkMinutes) min walk")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.muted)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(leaveBy)
+                        .font(.body.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(palette.leaveBy)
+                    Text("Leave by")
+                        .font(.caption2.weight(.semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(palette.muted)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Leave by \(leaveBy)")
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -750,46 +875,12 @@ private struct FeedView: View {
                 salt: 7,
                 rippleTrigger: featuredCardRipple
             ) {
-                featuredPlaceContent(
-                    title: place.name,
-                    subtitle: place.address,
-                    reason: search.matchReason(for: place, interests: activeInterests),
-                    selected: selected
-                )
+                livePlaceContent(place, featured: true)
             }
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(place.id)
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func featuredPlaceContent(title: String, subtitle: String, reason: String?, selected: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 5) {
-                if let reason {
-                    Text(reason)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.signal)
-                }
-                Text(title)
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(palette.ink)
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(palette.muted)
-                }
-            }
-            Spacer(minLength: 8)
-            if selected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(palette.signal)
-                    .accessibilityHidden(true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
     }
 
     private func liveRow(_ place: LivePlace) -> some View {
@@ -797,95 +888,91 @@ private struct FeedView: View {
         return Button {
             selection = .live(place.id)
         } label: {
-            rowLabel(
-                title: place.name,
-                subtitle: place.address,
-                reason: search.matchReason(for: place, interests: activeInterests),
-                leaveBy: nil,
-                selected: selected
-            )
+            livePlaceContent(place, featured: false)
+                .padding(.vertical, 6)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(place.id)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func rowLabel(title: String, subtitle: String, reason: String? = nil, leaveBy: Date?, selected: Bool) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(palette.ink)
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(palette.muted)
-                if let reason {
-                    Text(reason)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.signal)
-                }
-                if let leaveBy {
-                    Label {
-                        Text("Leave by \(leaveBy.formatted(date: .omitted, time: .shortened))")
-                            .monospacedDigit()
-                    } icon: {
-                        Image(systemName: "clock")
+    /// The feed number is the map pin number, so a row and its pin share one label.
+    private func indexNumber(of place: LivePlace) -> Int {
+        (search.results.firstIndex { $0.id == place.id } ?? 0) + 1
+    }
+
+    /// A marker, then the name joined by dots to its distance, like an atlas index entry.
+    private func livePlaceContent(_ place: LivePlace, featured: Bool) -> some View {
+        let reason = search.matchReason(for: place, interests: activeInterests)
+        let summary = place.summary
+        return HStack(alignment: .firstTextBaseline, spacing: 12) {
+            IndexMarker(number: indexNumber(of: place), selected: selection == .live(place.id), palette: palette)
+            VStack(alignment: .leading, spacing: featured ? 5 : 4) {
+                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                    Text(place.name)
+                        .font(featured ? .title3.weight(.bold) : .headline)
+                        .foregroundStyle(palette.ink)
+                        .layoutPriority(1)
+                    if let center {
+                        DotLeader(color: palette.border)
+                        distanceText(place.distance(from: center))
+                            .font(.subheadline.weight(.medium).monospacedDigit())
+                            .foregroundStyle(palette.ink)
+                            .layoutPriority(1)
+                    } else {
+                        Spacer(minLength: 0)
                     }
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(palette.leaveBy)
                 }
-            }
-            Spacer(minLength: 8)
-            if selected {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(palette.signal)
-                    .accessibilityHidden(true)
+                if !summary.isEmpty || reason != nil {
+                    HStack(spacing: 4) {
+                        if !summary.isEmpty {
+                            Text(summary)
+                                .foregroundStyle(palette.muted)
+                                .lineLimit(1)
+                        }
+                        if let reason {
+                            if !summary.isEmpty {
+                                Text("·")
+                                    .foregroundStyle(palette.muted)
+                                    .accessibilityHidden(true)
+                            }
+                            Text(reason)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(palette.signal)
+                                .layoutPriority(1)
+                        }
+                    }
+                    .font(.subheadline)
+                }
             }
         }
-        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 
+    private func distanceText(_ meters: CLLocationDistance) -> Text {
+        Text(Measurement(value: meters, unit: UnitLength.meters).formatted(.measurement(width: .abbreviated, usage: .road)))
+    }
+
     private var placeContext: some View {
-        let mapOpen = railMapSettled || !allowsUnfoldMotion
-        let cardOpen = railCardSettled || !allowsUnfoldMotion
-        return ScrollView {
+        ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                paperUnfold(
-                    open: mapOpen,
-                    tilt: -11,
-                    scaleX: 0.92,
-                    scaleY: 0.97,
-                    minOpacity: 0.45,
-                    creaseOpacity: 0.10,
-                    cornerRadius: 18
-                ) {
-                    railMap
-                        .mapBlurReveal(palette: palette, trigger: railMapRevealKey, hold: !mapOpen)
-                        .frame(height: foldOffset == nil ? 180 : 240)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .strokeBorder(palette.border, lineWidth: 1)
-                        )
-                }
+                railMap
+                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey)
+                    .frame(height: foldOffset == nil ? 180 : 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(palette.border, lineWidth: 1)
+                    )
 
                 if selectedSample != nil || selectedLive != nil {
-                    paperUnfold(
-                        open: cardOpen,
-                        tilt: -13,
-                        scaleX: 0.90,
-                        scaleY: 0.96,
-                        minOpacity: 0.35,
-                        creaseOpacity: 0.12,
-                        cornerRadius: 20
-                    ) {
+                    Group {
                         if let sample = selectedSample {
                             FrostedGlassCard(
                                 palette: palette,
                                 seedKey: sample.id,
                                 salt: 29,
-                                rippleTrigger: railContextRipple,
                                 tapToRipple: true
                             ) {
                                 VStack(alignment: .leading, spacing: 10) {
@@ -923,7 +1010,6 @@ private struct FeedView: View {
                                 palette: palette,
                                 seedKey: live.id,
                                 salt: 37,
-                                rippleTrigger: railContextRipple,
                                 tapToRipple: true
                             ) {
                                 VStack(alignment: .leading, spacing: 10) {
@@ -963,7 +1049,6 @@ private struct FeedView: View {
             .padding(.top, 8)
             .padding(.bottom, 20)
         }
-        .scrollClipDisabled()
         .background(palette.ground.ignoresSafeArea())
         .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
     }
@@ -997,8 +1082,7 @@ private struct FeedView: View {
                                     .lineLimit(1)
                                     .layoutPriority(1)
                                 DotLeader(color: palette.border)
-                                Text(Measurement(value: meters, unit: UnitLength.meters)
-                                    .formatted(.measurement(width: .abbreviated, usage: .road)))
+                                distanceText(meters)
                                     .font(.subheadline.monospacedDigit())
                                     .foregroundStyle(palette.muted)
                                     .layoutPriority(1)
@@ -1020,57 +1104,21 @@ private struct FeedView: View {
         }
     }
 
-    private func paperUnfold<Content: View>(
-        open: Bool,
-        tilt: Double,
-        scaleX: CGFloat,
-        scaleY: CGFloat,
-        minOpacity: Double,
-        creaseOpacity: Double,
-        cornerRadius: CGFloat,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            .overlay(alignment: .trailing) {
-                LinearGradient(
-                    colors: [.clear, palette.ink.opacity(open ? 0 : creaseOpacity)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: 44)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .offset(x: open ? 0 : 10)
-            .scaleEffect(x: open ? 1 : scaleX, y: open ? 1 : scaleY, anchor: .trailing)
-            .rotation3DEffect(
-                .degrees(open ? 0 : tilt),
-                axis: (x: 0, y: 1, z: 0),
-                anchor: .trailing,
-                perspective: 0.42
-            )
-            .opacity(open ? 1 : minOpacity)
-    }
-
     @ViewBuilder
     private var railMap: some View {
-        // Compact width never shows this column, so don't make MapKit load and draw a map offscreen.
-        if horizontalSizeClass == .compact {
+        // Compact width never shows this column unless the Duo's book layout is up, so don't make MapKit load and draw a map offscreen.
+        if horizontalSizeClass == .compact, foldOffset == nil {
             Color.clear
         } else {
             Map(position: $railCamera) {
                 if let live = selectedLive {
-                    ForEach(search.results) { place in
+                    ForEach(Array(search.results.enumerated()), id: \.element.id) { index, place in
                         let isSelected = place.id == live.id
                         Annotation(place.name, coordinate: place.coordinate) {
                             Button {
                                 selection = .live(place.id)
                             } label: {
-                                Image(systemName: "mappin.circle.fill")
-                                    .font(isSelected ? .title2 : .body)
-                                    .foregroundStyle(.white, isSelected ? palette.signal : palette.ink)
-                                    .frame(width: 44, height: 44)
+                                mapPin(number: index + 1, selected: isSelected, size: isSelected ? 30 : 24)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -1091,6 +1139,13 @@ private struct FeedView: View {
             }
             .mapStyle(.standard(pointsOfInterest: .excludingAll))
         }
+    }
+
+    /// The same numbered marker as the feed row, lifted off the map, with a 44pt hit area.
+    private func mapPin(number: Int, selected: Bool, size: CGFloat) -> some View {
+        IndexMarker(number: number, selected: selected, palette: palette, size: size)
+            .shadow(color: .black.opacity(0.22), radius: 2, y: 1)
+            .frame(width: 44, height: 44)
     }
 
     private func contextMetricRow(_ label: String, value: String, valueColor: Color? = nil) -> some View {
