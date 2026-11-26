@@ -600,8 +600,11 @@ struct SalioOpening: View {
         static var storageKey: String { SalioTestStore.scopedKey("salioOpeningStyle") }
     }
 
-    /// Whether the feed has finished its first load, so there is something worth uncovering.
+    /// Whether the feed has finished its first load.
     let ready: Bool
+    /// Whether that load found places. Only then does Tear open uncover the feed; a failure, no results,
+    /// or no location fades instead, so the tear never lands on an empty or error state.
+    let found: Bool
     let onFinish: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -681,7 +684,7 @@ struct SalioOpening: View {
         }
         .onChange(of: ready, initial: true) {
             guard ready, releasedAt == nil else { return }
-            tears = style == .tear
+            tears = style == .tear && found
             releasedAt = .now
         }
         .task(id: [start, releasedAt]) {
