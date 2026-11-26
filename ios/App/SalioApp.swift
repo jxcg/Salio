@@ -418,6 +418,9 @@ private struct FeedView: View {
                             .accessibilityHidden(true)
                     }
                     .frame(width: foldOffset)
+                    // Nothing on the left page, ASCII veil included, may draw past the fold while folding.
+                    // The mask runs full height so the page can still reach under the status bar.
+                    .mask { Rectangle().ignoresSafeArea(edges: .vertical) }
                     NavigationStack { feedPage }
                 }
                 .overlay(alignment: .topLeading) {
@@ -992,7 +995,6 @@ private struct FeedView: View {
             .padding(.top, 8)
             .padding(.bottom, 20)
         }
-        .scrollClipDisabled()
         .background(palette.ground.ignoresSafeArea())
         .navigationTitle(selectedSample == nil ? "Place details" : "Timing")
     }
