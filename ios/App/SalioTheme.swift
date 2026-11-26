@@ -241,7 +241,7 @@ struct RefractedReticleSurface: View {
         key.unicodeScalars.reduce(salt) { $0 &* 31 &+ Int($1.value) }
     }
 
-    fileprivate static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
+    static func cellHash(row: Int, col: Int, seed: Int) -> UInt64 {
         var h = UInt64(bitPattern: Int64(row &* 73_856_093 ^ col &* 19_349_663 ^ seed &* 83_492_791))
         h ^= h >> 30
         h &*= 0xBF58_476D_1CE4_E5B9
@@ -580,9 +580,10 @@ struct IndexMarker: View {
     }
 }
 
-/// Salio's first moment on a cold launch: ASCII characters burst out from the centre of the launch
-/// screen and tear it open onto the feed underneath, with no fade, so launch and feed read as one page.
-/// Each launch picks a shape and a colour mix at random, independently. It never takes taps or blocks loading.
+/// Salio's first moment on a cold launch: once the app is active, an `AsciiReveal` in a random shape and
+/// colour mix bursts the launch screen open onto the feed, riding one refraction wave, with no fade.
+/// Its colours follow light and dark but not the theme, because the launch screen before it can't know
+/// the theme. Under Reduce Motion, VoiceOver or Increase Contrast, the launch colour simply fades.
 struct SalioOpening: View {
     let onFinish: () -> Void
 
@@ -591,14 +592,20 @@ struct SalioOpening: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.scenePhase) private var scenePhase
-    /// Set once the app is active, after iOS's launch zoom, so the burst plays where it can be seen.
+    /// Set once the app is active, after iOS's launch zoom, so the reveal plays where it can be seen.
     @State private var start: Date?
     @State private var fading = false
-    /// The burst's shape and colour mix, picked once per launch and independent of each other.
-    @State private var pattern = OpeningBurst.Pattern.allCases.randomElement() ?? .starburst
-    @State private var mix = Int.random(in: 0..<OpeningBurst.mixes.count)
+    /// Shape and colours are picked once per launch, independently of each other.
+    @State private var shape = AsciiReveal.Shape.allCases.randomElement() ?? .starburst
+    @State private var accents = Self.mixes.randomElement() ?? Self.mixes[0]
 
-    private static let wobble: TimeInterval = 0.5
+    private static let duration: TimeInterval = 0.6
+    /// Accent colours as (dark, light) pairs: prism, ember, and tide.
+    private static let mixes: [[(dark: UInt32, light: UInt32)]] = [
+        [(0x4CC38A, 0x1D8150), (0x9AA0F5, 0x5A55C8), (0xE69B42, 0xC87316)],
+        [(0xE69B42, 0xC87316), (0xE8805A, 0xC4562E), (0xB7AEDD, 0x6A5BB3)],
+        [(0x4CC38A, 0x1D8150), (0x9586E0, 0x7666C6), (0x9CA2B3, 0x5A5F6C)],
+    ]
 
     private var animates: Bool {
         !reduceMotion && !voiceOver && contrast != .increased
@@ -606,34 +613,33 @@ struct SalioOpening: View {
 
     var body: some View {
         let dark = colorScheme == .dark
-        TimelineView(.animation(paused: !animates)) { timeline in
-            GeometryReader { proxy in
-                let size = proxy.size
-                let elapsed = start.map { max(timeline.date.timeIntervalSince($0), 0) } ?? 0
-                let t = min(elapsed / Self.wobble, 1)
-                let eased = 1 - pow(1 - t, 3)
-                Group {
-                    if animates {
-                        OpeningBurst(
-                            dark: dark, pattern: pattern, mix: mix,
-                            front: OpeningBurst.front(elapsed) * hypot(size.width, size.height)
-                        )
-                    } else {
-                        OpeningGrid(dark: dark, showsField: contrast != .increased)
-                            .equatable()
-                    }
-                }
-                .layerEffect(
-                    ShaderLibrary.frostedRefraction(
-                        .float2(CGPoint(x: size.width * 0.5, y: size.height * 0.5)),
-                        .float(Float(eased * hypot(size.width, size.height) * 0.62)),
-                        .float(64),
-                        .float(Float(sin(t * .pi)) * 0.85),
-                        .float(1.8)
-                    ),
-                    maxSampleOffset: CGSize(width: 20, height: 20),
-                    isEnabled: animates && t < 1
+        TimelineView(.animation(paused: !animates || start == nil)) { timeline in
+            let progress = start.map { min(timeline.date.timeIntervalSince($0) / Self.duration, 1) } ?? 0
+            if animates {
+                AsciiReveal(
+                    progress: progress,
+                    shape: shape,
+                    cover: Color("LaunchBackground"),
+                    dots: Color(hex: dark ? 0x2A2C38 : 0xD6D8E2),
+                    core: Color(hex: dark ? 0xE4E6FF : 0x2E2A78),
+                    accents: accents.map { Color(hex: dark ? $0.dark : $0.light) }
                 )
+                .visualEffect { content, proxy in
+                    let reach = hypot(proxy.size.width, proxy.size.height)
+                    return content.layerEffect(
+                        ShaderLibrary.frostedRefraction(
+                            .float2(proxy.size.width / 2, proxy.size.height / 2),
+                            .float((1 - pow(1 - progress, 3)) * reach * 0.62),
+                            .float(64),
+                            .float(sin(progress * .pi) * 0.85),
+                            .float(1.8)
+                        ),
+                        maxSampleOffset: CGSize(width: 20, height: 20),
+                        isEnabled: progress > 0 && progress < 1
+                    )
+                }
+            } else {
+                Color("LaunchBackground")
             }
         }
         .ignoresSafeArea()
@@ -646,171 +652,13 @@ struct SalioOpening: View {
         .task(id: start) {
             guard start != nil else { return }
             if animates {
-                // The burst has uncovered the whole feed by now, so the opening just leaves.
-                try? await Task.sleep(for: .seconds(OpeningBurst.duration))
+                // The reveal draws nothing once it ends, so the opening can just leave.
+                try? await Task.sleep(for: .seconds(Self.duration))
             } else {
                 withAnimation(.easeOut(duration: 0.2)) { fading = true }
                 try? await Task.sleep(for: .milliseconds(220))
             }
             onFinish()
-        }
-    }
-}
-
-/// The opening's cell pitch, shared by the grid and the burst so their cells line up.
-private let openingStep: CGFloat = 14
-
-/// The launch background with a faint dot grid, the still opening under Reduce Motion, VoiceOver and
-/// Increase Contrast. The opening's colours are the same for every theme, because the launch screen
-/// before it can't know the theme; they change only between light and dark.
-private struct OpeningGrid: View, Equatable {
-    let dark: Bool
-    let showsField: Bool
-
-    var body: some View {
-        let ground = Color(hex: dark ? 0x0B0C10 : 0xF2F3F6)
-        let dot = Color(hex: dark ? 0x2A2C38 : 0xD6D8E2)
-        Canvas(rendersAsynchronously: false) { context, size in
-            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(ground))
-            guard showsField else { return }
-            var dots = Path()
-            for row in 0...Int(size.height / openingStep) {
-                for col in 0...Int(size.width / openingStep) {
-                    let x = CGFloat(col) * openingStep + openingStep / 2
-                    let y = CGFloat(row) * openingStep + openingStep / 2
-                    dots.addEllipse(in: CGRect(x: x - 1.2, y: y - 1.2, width: 2.4, height: 2.4))
-                }
-            }
-            context.fill(dots, with: .color(dot))
-        }
-    }
-}
-
-/// The launch screen as a grid of cells that ASCII characters burst across: a ragged front that is
-/// densest (`@ #`) and thins to `* + = - : .` behind it, in one of a few shapes. Its colour splits around
-/// the centre into one of a few mixes of Salio's colours, with a bright core at the front. Cells the front
-/// has passed are left empty, so the feed underneath shows through without a fade.
-struct OpeningBurst: View {
-    /// The front's shape. Each one maps a cell to how far the front must travel to reach it.
-    enum Pattern: CaseIterable {
-        /// A ragged ring with uneven spikes.
-        case starburst
-        /// A five-petal flower.
-        case bloom
-        /// A diamond, like a dot-matrix compass.
-        case diamond
-        /// Three arms that sweep round as they grow.
-        case pinwheel
-        /// A horizontal rift that splits open from the centre line, like the old waveform.
-        case rift
-
-        func distance(dx: CGFloat, dy: CGFloat, angle: CGFloat, diagonal: CGFloat) -> CGFloat {
-            switch self {
-            case .starburst:
-                hypot(dx, dy) / (1 + 0.1 * sin(angle * 7) + 0.06 * sin(angle * 13 + 1))
-            case .bloom:
-                hypot(dx, dy) / (1 + 0.2 * cos(angle * 5))
-            case .diamond:
-                (abs(dx) + abs(dy)) * 0.75
-            case .pinwheel:
-                hypot(dx, dy) + ((angle + .pi) / (2 * .pi) * 3).truncatingRemainder(dividingBy: 1) * diagonal * 0.1
-            case .rift:
-                abs(dy) * (1 + 0.25 * sin(dx / 23)) + abs(dx) * 0.25
-            }
-        }
-    }
-
-    /// The front as a fraction of the screen diagonal: fast out of the centre, easing near the corners.
-    static func front(_ elapsed: TimeInterval) -> CGFloat {
-        let p = min(elapsed / 0.8, 1)
-        return CGFloat(1 - (1 - p) * (1 - p)) * 0.85
-    }
-
-    /// Seconds until every cell is open, whatever the pattern.
-    static let duration: TimeInterval = 0.56
-
-    /// Three sector colours each, as (dark, light) pairs: prism, ember, and tide.
-    static let mixes: [[(UInt32, UInt32)]] = [
-        [(0x4CC38A, 0x1D8150), (0x9AA0F5, 0x5A55C8), (0xE69B42, 0xC87316)],
-        [(0xE69B42, 0xC87316), (0xE8805A, 0xC4562E), (0xB7AEDD, 0x6A5BB3)],
-        [(0x4CC38A, 0x1D8150), (0x9586E0, 0x7666C6), (0x9CA2B3, 0x5A5F6C)],
-    ]
-
-    let dark: Bool
-    let pattern: Pattern
-    let mix: Int
-    /// How far in points the front has travelled from the centre, in the pattern's own distance.
-    let front: CGFloat
-
-    private static let ramp = ["@", "#", "*", "+", "=", "-", ":", "."]
-
-    /// The ramp's characters as outlines centred on the origin, made once, so each frame fills one path
-    /// per colour instead of typesetting every character.
-    private static let glyphPaths: [Path] = {
-        let font = UIFont.monospacedSystemFont(ofSize: 13, weight: .bold) as CTFont
-        let lineMiddle = (CTFontGetAscent(font) - CTFontGetDescent(font)) / 2
-        return ramp.map { character in
-            var unit = character.utf16.first ?? 0
-            var glyph = CGGlyph()
-            CTFontGetGlyphsForCharacters(font, &unit, &glyph, 1)
-            let advance = CTFontGetAdvancesForGlyphs(font, .horizontal, &glyph, nil, 1)
-            // Flip to SwiftUI's downward y and centre the character's line box, like Text at a `.center` anchor.
-            var transform = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: -advance / 2, ty: lineMiddle)
-            return CTFontCreatePathForGlyph(font, glyph, &transform).map { Path($0) } ?? Path()
-        }
-    }()
-
-    var body: some View {
-        let ground = Color(hex: dark ? 0x0B0C10 : 0xF2F3F6)
-        let gridDot = Color(hex: dark ? 0x2A2C38 : 0xD6D8E2)
-        let colors = [Color(hex: dark ? 0xE4E6FF : 0x2E2A78)]
-            + Self.mixes[mix].map { Color(hex: dark ? $0.0 : $0.1) }
-        Canvas(rendersAsynchronously: false) { context, size in
-            let centre = CGPoint(x: size.width / 2, y: size.height / 2)
-            let diagonal = hypot(size.width, size.height)
-            let thickness = diagonal * 0.22
-            let columns = Int(size.width / openingStep)
-            var cover = Path(), dots = Path()
-            var inks = [Path](repeating: Path(), count: colors.count)
-
-            for row in 0...Int(size.height / openingStep) {
-                let top = CGFloat(row) * openingStep
-                // Covered cells in a row join into one rectangle, so no seams show between them.
-                var run: CGFloat?
-                for col in 0...columns {
-                    let point = CGPoint(x: CGFloat(col) * openingStep + openingStep / 2, y: top + openingStep / 2)
-                    let dx = point.x - centre.x, dy = point.y - centre.y
-                    let angle = atan2(dy, dx)
-                    let h = RefractedReticleSurface.cellHash(row: row, col: col, seed: 49)
-                    // A little per-cell jitter makes every shape's front ragged, like debris.
-                    let reach = front + CGFloat(h % 100) / 100 * openingStep * 1.5
-                    let behind = (reach - pattern.distance(dx: dx, dy: dy, angle: angle, diagonal: diagonal)) / thickness
-
-                    if behind < 0.35 {
-                        dots.addEllipse(in: CGRect(x: point.x - 1.2, y: point.y - 1.2, width: 2.4, height: 2.4))
-                        if run == nil { run = CGFloat(col) * openingStep }
-                    } else if let start = run {
-                        cover.addRect(CGRect(x: start, y: top, width: CGFloat(col) * openingStep - start, height: openingStep))
-                        run = nil
-                    }
-                    // A short trail runs on over the feed, so the characters lead straight into it.
-                    if behind > 0, behind < 0.7, Double((h >> 8) % 1000) / 1000 > Double(behind) * 0.9 {
-                        let level = min(Int(behind / 0.7 * CGFloat(Self.ramp.count)), Self.ramp.count - 1)
-                        // Hue follows the angle, with jittered edges so the sectors blend.
-                        let turn = (Double(angle) + .pi) / (2 * .pi) * 3 + Double((h >> 20) % 100) / 250
-                        inks[level < 2 ? 0 : 1 + Int(turn) % 3]
-                            .addPath(Self.glyphPaths[level], transform: CGAffineTransform(translationX: point.x, y: point.y))
-                    }
-                }
-                if let start = run {
-                    cover.addRect(CGRect(x: start, y: top, width: CGFloat(columns + 1) * openingStep - start, height: openingStep))
-                }
-            }
-            context.fill(cover, with: .color(ground))
-            context.fill(dots, with: .color(gridDot))
-            for (ink, color) in zip(inks, colors) {
-                context.fill(ink, with: .color(color))
-            }
         }
     }
 }
