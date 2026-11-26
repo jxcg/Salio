@@ -63,6 +63,42 @@ struct LivePlace: Identifiable, Equatable {
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
+
+    /// Category and street, such as "Café · 22 Frith Street", instead of the full postal address.
+    var summary: String {
+        let street = address.split(separator: ",").first.map { $0.trimmingCharacters(in: .whitespaces) }
+        return [category?.displayName, street].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// Straight-line distance, worked out on the device.
+    func distance(from center: CLLocationCoordinate2D) -> CLLocationDistance {
+        CLLocation(latitude: latitude, longitude: longitude)
+            .distance(from: CLLocation(latitude: center.latitude, longitude: center.longitude))
+    }
+}
+
+extension MKPointOfInterestCategory {
+    var displayName: String? {
+        switch self {
+        case .cafe: "Café"
+        case .bakery: "Bakery"
+        case .restaurant: "Restaurant"
+        case .brewery: "Brewery"
+        case .nightlife: "Nightlife"
+        case .foodMarket: "Food market"
+        case .museum: "Museum"
+        case .movieTheater: "Cinema"
+        case .theater: "Theatre"
+        case .musicVenue: "Music venue"
+        case .landmark: "Landmark"
+        case .park: "Park"
+        case .beach: "Beach"
+        case .zoo: "Zoo"
+        case .aquarium: "Aquarium"
+        case .amusementPark: "Theme park"
+        default: nil
+        }
+    }
 }
 
 enum PlaceRequest: Sendable {
@@ -161,6 +197,7 @@ final class SearchModel {
 
     private let searcher: any PlaceSearching
     private var rawNearbyResults: [LivePlace] = []
+    private var nearbyCenter: CLLocationCoordinate2D?
 
     init(searcher: any PlaceSearching) {
         self.searcher = searcher
@@ -173,12 +210,13 @@ final class SearchModel {
     }
 
     func loadNearby(near center: CLLocationCoordinate2D, matching interests: [String]) async {
+        nearbyCenter = center
         await load(.nearby(center), nearby: true, interests: interests)
     }
 
     func reprioritize(for interests: [String]) {
         guard isNearbyResults else { return }
-        results = Self.prioritized(rawNearbyResults, for: interests)
+        results = Self.prioritized(rawNearbyResults, for: interests, near: nearbyCenter)
     }
 
     func matchReason(for place: LivePlace, interests: [String]) -> String? {
@@ -195,7 +233,7 @@ final class SearchModel {
             let places = try await searcher.search(request)
             isNearbyResults = nearby
             rawNearbyResults = nearby ? places : []
-            results = nearby ? Self.prioritized(places, for: interests) : places
+            results = nearby ? Self.prioritized(places, for: interests, near: nearbyCenter) : places
             status = results.isEmpty ? .empty : .results
         } catch {
             isNearbyResults = false
@@ -205,11 +243,19 @@ final class SearchModel {
         }
     }
 
-    private static func prioritized(_ places: [LivePlace], for interests: [String]) -> [LivePlace] {
-        guard !interests.isEmpty else { return places }
+    /// Interest matches first, and each group nearest first.
+    private static func prioritized(
+        _ places: [LivePlace],
+        for interests: [String],
+        near center: CLLocationCoordinate2D?
+    ) -> [LivePlace] {
+        let ordered = center.map { center in
+            places.sorted { $0.distance(from: center) < $1.distance(from: center) }
+        } ?? places
+        guard !interests.isEmpty else { return ordered }
         var matches: [LivePlace] = []
         var others: [LivePlace] = []
-        for place in places {
+        for place in ordered {
             if Preferences.matchingInterest(for: place.category, in: interests) != nil {
                 matches.append(place)
             } else {
@@ -252,6 +298,7 @@ private struct FeedView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.openURL) private var openURL
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
@@ -434,12 +481,7 @@ private struct FeedView: View {
                                 rippleTrigger: mapCardRipple,
                                 tapToRipple: true
                             ) {
-                                featuredPlaceContent(
-                                    title: place.name,
-                                    subtitle: place.address,
-                                    reason: search.matchReason(for: place, interests: activeInterests),
-                                    selected: true
-                                )
+                                livePlaceContent(place, featured: true)
                             }
                             .padding(.horizontal, 16)
                             .padding(.bottom, 8)
@@ -605,18 +647,14 @@ private struct FeedView: View {
 
     private var placesMap: some View {
         Map(position: $camera) {
-            ForEach(search.results) { place in
+            ForEach(Array(search.results.enumerated()), id: \.element.id) { index, place in
                 let selected = selection == .live(place.id)
-                let color: Color = selected ? palette.signal : palette.ink
                 Annotation(place.name, coordinate: place.coordinate) {
                     Button {
                         selection = .live(place.id)
                         mapCardRipple += 1
                     } label: {
-                        Image(systemName: "mappin.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.white, color)
-                            .frame(width: 44, height: 44)
+                        mapPin(number: index + 1, selected: selected, size: 30)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -642,9 +680,22 @@ private struct FeedView: View {
                         words: ["Getting our bearings…", "Consulting the compass…", "Squinting at maps…", "Sniffing the wind…"]
                     )
                 } else {
-                    Text("Search places or turn on location to see what’s nearby.")
-                        .font(.subheadline)
-                        .foregroundStyle(palette.muted)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Search places or turn on location to see what’s nearby.")
+                            .font(.subheadline)
+                            .foregroundStyle(palette.muted)
+                        // By now Salio has already asked for location, so only Settings can turn it on.
+                        if didLocate, center == nil, let settings = URL(string: UIApplication.openSettingsURLString) {
+                            Button("Turn on location") { openURL(settings) }
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(palette.onCTA)
+                                .padding(.horizontal, 16)
+                                .frame(minHeight: 44)
+                                .background(palette.ink, in: Capsule())
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("turn-on-location")
+                        }
+                    }
                 }
             }
         case .searching:
@@ -724,15 +775,35 @@ private struct FeedView: View {
 
     private func sampleRow(_ entry: FeedEntry) -> some View {
         let selected = selectedSample?.id == entry.id
+        let leaveBy = entry.leaveBy.formatted(date: .omitted, time: .shortened)
         return Button {
             selection = .sample(entry.id)
         } label: {
-            rowLabel(
-                title: entry.name,
-                subtitle: "\(entry.category) · \(entry.walkMinutes) min walk",
-                leaveBy: entry.leaveBy,
-                selected: selected
-            )
+            HStack(spacing: 12) {
+                IndexMarker(symbol: "clock", selected: selected, palette: palette)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.name)
+                        .font(.headline)
+                        .foregroundStyle(palette.ink)
+                    Text("\(entry.category) · \(entry.walkMinutes) min walk")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.muted)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(leaveBy)
+                        .font(.body.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(palette.leaveBy)
+                    Text("Leave by")
+                        .font(.caption2.weight(.semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(palette.muted)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Leave by \(leaveBy)")
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -750,46 +821,12 @@ private struct FeedView: View {
                 salt: 7,
                 rippleTrigger: featuredCardRipple
             ) {
-                featuredPlaceContent(
-                    title: place.name,
-                    subtitle: place.address,
-                    reason: search.matchReason(for: place, interests: activeInterests),
-                    selected: selected
-                )
+                livePlaceContent(place, featured: true)
             }
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(place.id)
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func featuredPlaceContent(title: String, subtitle: String, reason: String?, selected: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 5) {
-                if let reason {
-                    Text(reason)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.signal)
-                }
-                Text(title)
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(palette.ink)
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(palette.muted)
-                }
-            }
-            Spacer(minLength: 8)
-            if selected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(palette.signal)
-                    .accessibilityHidden(true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
     }
 
     private func liveRow(_ place: LivePlace) -> some View {
@@ -797,53 +834,70 @@ private struct FeedView: View {
         return Button {
             selection = .live(place.id)
         } label: {
-            rowLabel(
-                title: place.name,
-                subtitle: place.address,
-                reason: search.matchReason(for: place, interests: activeInterests),
-                leaveBy: nil,
-                selected: selected
-            )
+            livePlaceContent(place, featured: false)
+                .padding(.vertical, 6)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(place.id)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func rowLabel(title: String, subtitle: String, reason: String? = nil, leaveBy: Date?, selected: Bool) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(palette.ink)
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(palette.muted)
-                if let reason {
-                    Text(reason)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.signal)
-                }
-                if let leaveBy {
-                    Label {
-                        Text("Leave by \(leaveBy.formatted(date: .omitted, time: .shortened))")
-                            .monospacedDigit()
-                    } icon: {
-                        Image(systemName: "clock")
+    /// The feed number is the map pin number, so a row and its pin share one label.
+    private func indexNumber(of place: LivePlace) -> Int {
+        (search.results.firstIndex { $0.id == place.id } ?? 0) + 1
+    }
+
+    /// A marker, then the name joined by dots to its distance, like an atlas index entry.
+    private func livePlaceContent(_ place: LivePlace, featured: Bool) -> some View {
+        let reason = search.matchReason(for: place, interests: activeInterests)
+        let summary = place.summary
+        return HStack(alignment: .firstTextBaseline, spacing: 12) {
+            IndexMarker(number: indexNumber(of: place), selected: selection == .live(place.id), palette: palette)
+            VStack(alignment: .leading, spacing: featured ? 5 : 4) {
+                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                    Text(place.name)
+                        .font(featured ? .title3.weight(.bold) : .headline)
+                        .foregroundStyle(palette.ink)
+                        .layoutPriority(1)
+                    if let center {
+                        DotLeader(color: palette.border)
+                        distanceText(place.distance(from: center))
+                            .font(.subheadline.weight(.medium).monospacedDigit())
+                            .foregroundStyle(palette.ink)
+                            .layoutPriority(1)
+                    } else {
+                        Spacer(minLength: 0)
                     }
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(palette.leaveBy)
                 }
-            }
-            Spacer(minLength: 8)
-            if selected {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(palette.signal)
-                    .accessibilityHidden(true)
+                if !summary.isEmpty || reason != nil {
+                    HStack(spacing: 4) {
+                        if !summary.isEmpty {
+                            Text(summary)
+                                .foregroundStyle(palette.muted)
+                                .lineLimit(1)
+                        }
+                        if let reason {
+                            if !summary.isEmpty {
+                                Text("·")
+                                    .foregroundStyle(palette.muted)
+                                    .accessibilityHidden(true)
+                            }
+                            Text(reason)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(palette.signal)
+                                .layoutPriority(1)
+                        }
+                    }
+                    .font(.subheadline)
+                }
             }
         }
-        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    private func distanceText(_ meters: CLLocationDistance) -> Text {
+        Text(Measurement(value: meters, unit: UnitLength.meters).formatted(.measurement(width: .abbreviated, usage: .road)))
     }
 
     private var placeContext: some View {
@@ -997,8 +1051,7 @@ private struct FeedView: View {
                                     .lineLimit(1)
                                     .layoutPriority(1)
                                 DotLeader(color: palette.border)
-                                Text(Measurement(value: meters, unit: UnitLength.meters)
-                                    .formatted(.measurement(width: .abbreviated, usage: .road)))
+                                distanceText(meters)
                                     .font(.subheadline.monospacedDigit())
                                     .foregroundStyle(palette.muted)
                                     .layoutPriority(1)
@@ -1056,16 +1109,13 @@ private struct FeedView: View {
     private var railMap: some View {
         Map(position: $railCamera) {
             if let live = selectedLive {
-                ForEach(search.results) { place in
+                ForEach(Array(search.results.enumerated()), id: \.element.id) { index, place in
                     let isSelected = place.id == live.id
                     Annotation(place.name, coordinate: place.coordinate) {
                         Button {
                             selection = .live(place.id)
                         } label: {
-                            Image(systemName: "mappin.circle.fill")
-                                .font(isSelected ? .title2 : .body)
-                                .foregroundStyle(.white, isSelected ? palette.signal : palette.ink)
-                                .frame(width: 44, height: 44)
+                            mapPin(number: index + 1, selected: isSelected, size: isSelected ? 30 : 24)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -1085,6 +1135,13 @@ private struct FeedView: View {
             }
         }
         .mapStyle(.standard(pointsOfInterest: .excludingAll))
+    }
+
+    /// The same numbered marker as the feed row, lifted off the map, with a 44pt hit area.
+    private func mapPin(number: Int, selected: Bool, size: CGFloat) -> some View {
+        IndexMarker(number: number, selected: selected, palette: palette, size: size)
+            .shadow(color: .black.opacity(0.22), radius: 2, y: 1)
+            .frame(width: 44, height: 44)
     }
 
     private func contextMetricRow(_ label: String, value: String, valueColor: Color? = nil) -> some View {

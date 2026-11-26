@@ -556,3 +556,34 @@ struct DotLeader: View {
             .accessibilityHidden(true)
     }
 }
+
+/// Marks a Nearby row with the same number as its map pin, like an atlas index.
+/// Unselected is an ink outline; selected fills with the signal colour.
+struct IndexMarker: View {
+    var number: Int?
+    var symbol: String?
+    let selected: Bool
+    let palette: SalioPalette
+    var size: CGFloat = 28
+
+    var body: some View {
+        Group {
+            if let number {
+                Text("\(number)")
+                    .font(.system(size: size * 0.46, weight: .semibold, design: .monospaced))
+            } else if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: size * 0.6, weight: .medium))
+            }
+        }
+        .foregroundStyle(selected ? palette.onCTA : (number == nil ? palette.leaveBy : palette.ink))
+        .frame(width: size, height: size)
+        .background(Circle().fill(selected ? palette.signal : (number == nil ? .clear : palette.card)))
+        .overlay {
+            if number != nil {
+                Circle().strokeBorder(selected ? palette.signal : palette.ink, lineWidth: 1.5)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}

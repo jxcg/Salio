@@ -54,6 +54,7 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
 - **Secondary copy:** SF Pro Text Regular (`.subheadline`, `muted`).
 - **Timing & micro-labels:** SF Mono / `.monospacedDigit()` for leave-by times and compact metadata.
 - **Corner radii:** `999pt` (`Capsule`) for search bar and primary action pills; `20pt` for focal cards; `16pt` for grouped row containers.
+- **Atlas index:** Live Nearby rows read like an atlas index. A numbered `IndexMarker` matches the place's map pin (ink outline; filled `signal` when selected), the name runs on a `DotLeader` to its straight-line distance, and the line below gives category and street with any interest match inline. Sample places show their leave-by time in a right-aligned tabular column.
 - **Touch targets:** At least `44×44pt` for toolbar buttons and map pins.
 - **iPhone Duo book layout:** When unfolded, Salio reads the fold from the display's division region and splits the inner display 50/50 like an open book. The right page keeps the closed cover's Nearby feed and toolbar, so cards, line wraps, and rhythm carry across the fold. The left page pairs a muted Apple Map crop (`240pt`) with the frosted Timing / Place details card (`Open in Maps` for live places) and an **Also nearby** list of the three places closest to the selection, with distances. iPad and other regular-width windows keep the balanced split view with a `270–340pt` context column.
 

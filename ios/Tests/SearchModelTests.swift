@@ -26,7 +26,7 @@ final class SearchModelTests: XCTestCase {
         XCTAssertTrue(model.results.isEmpty)
     }
 
-    func testNearbyPrioritizesMatchesReprioritizesLocallyAndLeavesTextSearchUntouched() async {
+    func testNearbyPutsMatchesFirstNearestFirstReprioritizesLocallyAndLeavesTextSearchUntouched() async {
         let cafe = StubPlaceSearcher.fixedPlaces[0]
         let cinema = StubPlaceSearcher.fixedPlaces[1]
         let unknown = LivePlace(id: "unknown", name: "Unknown", address: "", category: nil,
@@ -37,20 +37,20 @@ final class SearchModelTests: XCTestCase {
         let model = SearchModel(searcher: StubPlaceSearcher(results: original))
 
         await model.loadNearby(near: cafe.coordinate, matching: ["Food"])
-        XCTAssertEqual(model.results.map(\.id), ["bakery", "stub-cafe", "stub-cinema", "unknown"])
+        XCTAssertEqual(model.results.map(\.id), ["stub-cafe", "bakery", "stub-cinema", "unknown"])
         XCTAssertEqual(model.matchReason(for: bakery, interests: ["Food"]), "Matches Food")
         XCTAssertNil(model.matchReason(for: cinema, interests: ["Food"]))
         XCTAssertNil(model.matchReason(for: unknown, interests: ["Food"]))
         XCTAssertEqual(model.searchCount, 1)
 
         model.reprioritize(for: ["Film"])
-        XCTAssertEqual(model.results.map(\.id), ["stub-cinema", "bakery", "unknown", "stub-cafe"])
+        XCTAssertEqual(model.results.map(\.id), ["stub-cinema", "stub-cafe", "bakery", "unknown"])
         XCTAssertEqual(model.matchReason(for: cinema, interests: ["Film"]), "Matches Film")
         XCTAssertNil(model.matchReason(for: bakery, interests: ["Film"]))
         XCTAssertEqual(model.searchCount, 1)
 
         model.reprioritize(for: [])
-        XCTAssertEqual(model.results, original)
+        XCTAssertEqual(model.results.map(\.id), ["stub-cafe", "stub-cinema", "bakery", "unknown"])
         XCTAssertEqual(model.searchCount, 1)
 
         model.query = "coffee"
@@ -59,6 +59,14 @@ final class SearchModelTests: XCTestCase {
         XCTAssertNil(model.matchReason(for: cinema, interests: ["Film"]))
         model.reprioritize(for: ["Food"])
         XCTAssertEqual(model.results, original)
+    }
+
+    func testSummaryShowsCategoryAndStreetInsteadOfFullAddress() {
+        let place = LivePlace(id: "bar", name: "Bar Italia", address: "22 Frith Street, London, W1D 4RF, England",
+                              category: .cafe, latitude: 51.5136, longitude: -0.1318)
+        XCTAssertEqual(place.summary, "Café · 22 Frith Street")
+        let bare = LivePlace(id: "bare", name: "Bare", address: "", category: nil, latitude: 0, longitude: 0)
+        XCTAssertEqual(bare.summary, "")
     }
 
     func testEmptyResultShowsEmptyStatusAfterOneSearch() async {
