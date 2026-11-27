@@ -56,6 +56,9 @@ struct AsciiReveal: View {
     /// The front's depth, as a fraction of the diagonal: the sheet tears open 35% of the way in, and
     /// the trail of characters runs on over the uncovered content for the rest.
     private static let depth = 0.22, tear = 0.35
+    /// The torn edge thins out across this much of the depth, in `feather` steps, so what's behind it
+    /// fades in under the front instead of being cut out.
+    private static let softness = 0.4, feather = 6
 
     var body: some View {
         Canvas { context, size in draw(in: context, size: size) }
@@ -87,22 +90,26 @@ struct AsciiReveal: View {
         // Eases out, and ends once the trail has passed the furthest cell, so nothing is left at 1.
         let front = ((reach.max() ?? 0) + Self.depth) * (1 - pow(1 - min(max(progress, 0), 1), 2))
 
-        var sheet = Path(), grid = Path()
+        // `sheets[n]` is covered n/`feather` of the way; the last one is solid and carries the dot grid.
+        var sheets = [Path](repeating: Path(), count: Self.feather + 1), grid = Path()
         var inks = [Path](repeating: Path(), count: accents.count + 1)
         for row in 0..<rows {
-            var runStart: Int?
+            // Neighbouring cells with the same cover join into one rectangle, so no seams show between them.
+            var run: (step: Int, start: Int)?
             for col in 0...columns {
                 let index = row * columns + col
                 let behind = col < columns ? (front - reach[index]) / Self.depth : 1
-                // The cell past the row's end is never covered, so it closes the last run.
-                if col < columns, !opens || behind < Self.tear {
+                // The cell past the row's end is open, so it closes the last run.
+                let step = col < columns ? coverStep(behind: behind) : 0
+                if step != run?.step {
+                    if let run, run.step > 0 {
+                        sheets[run.step].addRect(CGRect(x: CGFloat(run.start) * cell, y: CGFloat(row) * cell, width: CGFloat(col - run.start) * cell, height: cell))
+                    }
+                    run = (step, col)
+                }
+                if step == Self.feather {
                     let p = point(row, col)
                     grid.addEllipse(in: CGRect(x: p.x - 1.2, y: p.y - 1.2, width: 2.4, height: 2.4))
-                    runStart = runStart ?? col
-                } else if let start = runStart {
-                    // Covered cells in a row join into one rectangle, so no seams show between them.
-                    sheet.addRect(CGRect(x: CGFloat(start) * cell, y: CGFloat(row) * cell, width: CGFloat(col - start) * cell, height: cell))
-                    runStart = nil
                 }
 
                 // The trail thins out the further a cell is behind the front.
@@ -115,11 +122,21 @@ struct AsciiReveal: View {
             }
         }
 
-        context.fill(sheet, with: .color(cover))
+        for (step, sheet) in sheets.enumerated().dropFirst() {
+            context.fill(sheet, with: .color(cover.opacity(Double(step) / Double(Self.feather))))
+        }
         context.fill(grid, with: .color(dots))
         for (ink, color) in zip(inks, [core] + accents) {
             context.fill(ink, with: .color(color))
         }
+    }
+
+    /// How covered a cell is, from 0 (open) to `feather` (solid): solid ahead of the torn edge, open
+    /// behind it, and in steps across the edge. A sheet that doesn't open stays solid.
+    private func coverStep(behind: Double) -> Int {
+        guard opens else { return Self.feather }
+        let amount = min(max(0.5 + (Self.tear - behind) / Self.softness, 0), 1)
+        return Int((amount * Double(Self.feather)).rounded(.up))
     }
 
     /// A stable pseudo-random number per cell (SplitMix64), so the ragged edge and trail never flicker.
