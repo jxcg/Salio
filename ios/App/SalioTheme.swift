@@ -608,6 +608,105 @@ struct AsciiRadar: View {
     }
 }
 
+/// A `#` that walks city blocks from `@` (you) to one nearby place after another, leaving a `: .`
+/// trail, and lights each place from `+` to `*` when it gets there. It sits in empty space, never
+/// behind text, and shows one finished route, still, under Reduce Motion, VoiceOver and Increase Contrast.
+struct AsciiRoute: View {
+    let palette: SalioPalette
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private static let cell: CGFloat = 14
+    /// Each walk takes `walk` seconds, then the lit place holds for `hold` before the next walk.
+    private static let walk: TimeInterval = 1.6, hold: TimeInterval = 0.8
+    /// Where the places sit, as fractions of the grid away from you.
+    private static let stops: [(x: Double, y: Double)] = [(0.36, -0.32), (-0.34, 0.3), (0.28, 0.36)]
+    /// Indexes into `AsciiReveal.ramp`: `@#*+=-:.`.
+    private static let you = 0, walker = 1, lit = 2, place = 3, near = 6, far = 7
+
+    var body: some View {
+        let animates = !reduceMotion && !voiceOver && contrast != .increased
+        // 30 fps is plenty: the walker moves a whole cell at a time.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animates)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            Canvas { context, size in draw(in: context, size: size, time: animates ? time : nil) }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// Draws one frame; `time` is the clock, or nil for the still frame.
+    private func draw(in context: GraphicsContext, size: CGSize, time: TimeInterval?) {
+        let cell = Self.cell
+        let columns = Int(size.width / cell), rows = Int(size.height / cell)
+        guard columns > 4, rows > 4 else { return }
+        let inset = CGPoint(x: (size.width - CGFloat(columns) * cell) / 2, y: (size.height - CGFloat(rows) * cell) / 2)
+        let start = (row: rows / 2, col: columns / 2)
+        let places = Self.stops.map { stop in
+            (row: min(max(start.row + Int(stop.y * Double(rows)), 0), rows - 1),
+             col: min(max(start.col + Int(stop.x * Double(columns)), 0), columns - 1))
+        }
+
+        // Which place this walk heads for, and how far into the walk it is.
+        let leg = Self.walk + Self.hold
+        let elapsed = time.map { $0.truncatingRemainder(dividingBy: leg * Double(places.count)) } ?? leg - 0.01
+        let target = Int(elapsed / leg)
+        let into = elapsed - Double(target) * leg
+
+        // Along the row first, then down the column, like walking round a block.
+        let goal = places[target]
+        var route = [Int]()
+        var col = start.col, row = start.row
+        while col != goal.col { col += goal.col > col ? 1 : -1; route.append(row * columns + col) }
+        while row != goal.row { row += goal.row > row ? 1 : -1; route.append(row * columns + col) }
+        let steps = min(Int(into / Self.walk * Double(route.count)), route.count)
+        let arrived = steps == route.count
+
+        // What each marked cell shows; everything else is a faint dot.
+        var marks = [Int: (glyph: Int, signal: Bool)]()
+        for (index, cell) in route.prefix(steps).enumerated() {
+            let behind = steps - 1 - index
+            marks[cell] = behind == 0 && !arrived ? (Self.walker, true) : (behind < 4 ? Self.near : Self.far, false)
+        }
+        marks[start.row * columns + start.col] = (Self.you, true)
+
+        var dots = Path(), trail = Path(), signal = Path(), waiting = Path()
+        for place in places {
+            let index = place.row * columns + place.col
+            if index == route.last, arrived {
+                marks[index] = (Self.lit, true)
+            } else {
+                marks[index] = nil
+                waiting.addPath(AsciiReveal.glyphs[Self.place], transform: transform(place.row, place.col, inset))
+            }
+        }
+        for row in 0..<rows {
+            for col in 0..<columns {
+                let at = transform(row, col, inset)
+                if let mark = marks[row * columns + col] {
+                    if mark.signal {
+                        signal.addPath(AsciiReveal.glyphs[mark.glyph], transform: at)
+                    } else {
+                        trail.addPath(AsciiReveal.glyphs[mark.glyph], transform: at)
+                    }
+                } else if !places.contains(where: { $0.row == row && $0.col == col }) {
+                    dots.addEllipse(in: CGRect(x: at.tx - 1, y: at.ty - 1, width: 2, height: 2))
+                }
+            }
+        }
+        context.fill(dots, with: .color(palette.border))
+        context.fill(trail, with: .color(palette.muted))
+        context.fill(waiting, with: .color(palette.signal.opacity(0.5)))
+        context.fill(signal, with: .color(palette.signal))
+    }
+
+    private func transform(_ row: Int, _ col: Int, _ inset: CGPoint) -> CGAffineTransform {
+        CGAffineTransform(translationX: inset.x + (CGFloat(col) + 0.5) * Self.cell, y: inset.y + (CGFloat(row) + 0.5) * Self.cell)
+    }
+}
+
 /// Stitching down the fold of the open Duo, like the binding of a book.
 struct BookSpine: View {
     let palette: SalioPalette

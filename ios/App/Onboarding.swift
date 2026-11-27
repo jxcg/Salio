@@ -97,59 +97,65 @@ struct OnboardingView: View {
                 "Somewhere worth going, nearby.",
                 "Salio shows places within walking distance that suit what you’re after. Everything stays on this device."
             )
-            radar
+            art(AsciiRadar(palette: palette))
         }
     }
 
     private var kindPicker: some View {
         VStack(alignment: .leading, spacing: 20) {
             heading("What are you looking for?", "Nearby only shows these. Choose as many as you like, or skip to see everything.")
-            // Two columns, or one at accessibility text sizes so names wrap between words. A plain
-            // grid, not a lazy one: there are only six cards, and all of them exist for VoiceOver.
-            let columns = dynamicTypeSize.isAccessibilitySize ? 1 : 2
-            let all = Preferences.kinds
-            Grid(horizontalSpacing: 10, verticalSpacing: 10) {
-                ForEach(Array(stride(from: 0, to: all.count, by: columns)), id: \.self) { first in
-                    GridRow {
-                        ForEach(all[first..<min(first + columns, all.count)], id: \.name) { kindButton($0.name, symbol: $0.symbol) }
-                    }
+            // An atlas index, like the feed: every kind is a numbered row in one card.
+            VStack(spacing: 0) {
+                ForEach(Array(Preferences.kinds.enumerated()), id: \.element.name) { index, kind in
+                    kindRow(index + 1, kind.name, symbol: kind.symbol)
                 }
             }
+            .padding(.vertical, 4)
+            .background(palette.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(palette.border, lineWidth: 1))
         }
     }
 
-    private func kindButton(_ name: String, symbol: String) -> some View {
+    private func kindRow(_ number: Int, _ name: String, symbol: String) -> some View {
         let selected = kinds.contains(name)
         return Button {
             if selected { kinds.remove(name) } else { kinds.insert(name) }
         } label: {
-            HStack(spacing: 10) {
-                // The icon stops growing at large text sizes and sits in a fixed column,
-                // so every name starts at the same edge and keeps the width it needs.
+            HStack(spacing: 12) {
+                IndexMarker(number: number, selected: selected, palette: palette)
                 Image(systemName: symbol)
+                    .foregroundStyle(selected ? palette.signal : palette.muted)
                     .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                     // A small hop when it's chosen.
                     .symbolEffect(.bounce, options: .speed(1.4), value: selected)
-                    .frame(width: 36)
+                    // A fixed column, so every name starts at the same edge.
+                    .frame(width: 32)
                 Text(name)
-                    // Still very large, but leaves room for the choices to fit.
-                    .dynamicTypeSize(...DynamicTypeSize.accessibility3)
+                    .font(.headline)
+                    .foregroundStyle(palette.ink)
+                    // Still very large, but keeps "Restaurants" whole on one line.
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                    .layoutPriority(1)
+                // Large names need the leader's room to wrap between words.
+                if dynamicTypeSize.isAccessibilitySize {
+                    Spacer(minLength: 0)
+                } else {
+                    DotLeader(color: palette.border)
+                }
+                // An ASCII tick box, so choosing reads like filling in a list.
+                Text(selected ? "[×]" : "[ ]")
+                    .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(selected ? palette.signal : palette.muted)
+                    .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+                    .fixedSize()
             }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(selected ? palette.onCTA : palette.ink)
-            // Fills the row's height, so the two cards in a row always match.
-            .frame(maxWidth: .infinity, minHeight: 52, maxHeight: .infinity, alignment: .leading)
             .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(selected ? palette.ink : palette.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(palette.border, lineWidth: selected ? 0 : 1)
-            )
+            .padding(.vertical, 12)
             .contentShape(Rectangle())
         }
-        .buttonStyle(PressStyle())
+        .buttonStyle(PressStyle(scale: 0.98))
         .sensoryFeedback(.selection, trigger: selected)
+        .accessibilityLabel(name)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("onboarding-kind-\(name)")
     }
@@ -160,15 +166,15 @@ struct OnboardingView: View {
                 "Find what’s around you",
                 "Salio uses your location to find places within walking distance. It stays on this device and is never sent anywhere."
             )
-            radar
+            art(AsciiRoute(palette: palette))
         }
     }
 
     /// Fills the empty space below the words, so it's left out when large text needs that space.
     @ViewBuilder
-    private var radar: some View {
+    private func art(_ content: some View) -> some View {
         if !dynamicTypeSize.isAccessibilitySize {
-            AsciiRadar(palette: palette)
+            content
                 .frame(height: 252)
                 .padding(.top, 12)
         }
