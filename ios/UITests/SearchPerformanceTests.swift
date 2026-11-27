@@ -7,7 +7,7 @@ final class SearchPerformanceTests: XCTestCase {
             throw XCTSkip("Run the performance check with SALIO_PERF_ENABLED=1.")
         }
         let app = XCUIApplication()
-        app.launchArguments = ["-SALIOStubSearch"]
+        app.launchArguments = ["-SALIOStubSearch", "-finishedOnboarding", "YES"]
 
         continueAfterFailure = false
         let options = XCTMeasureOptions()

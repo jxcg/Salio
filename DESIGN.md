@@ -25,7 +25,7 @@ Cool anodized silver-mist shell with lavender signal and warm peach-gold caustic
 | `border` | `#DFE2EA` | `#2A2E40` | 1pt hairlines and card outlines |
 | `ink` | `#0D0F14` | `#F4F5F8` | Primary titles and solid pill CTA fill (light) |
 | `muted` | `#5A5F6C` | `#9CA2B3` | Addresses, section headers, and secondary copy |
-| `signal` | `#6A5BB3` | `#B7AEDD` | Active accent, match reason labels, selected pin/switch |
+| `signal` | `#6A5BB3` | `#B7AEDD` | Active accent, step marker, selected pin/switch |
 | `leaveBy` | `#1D8150` | `#4CC38A` | Leave-by timing emphasis |
 | `causticWarm` | `#F0A670` | `#E89F6E` | Subtle sunlit glass wash inside focal cards |
 | `causticCool` | `#7666C6` | `#9586E0` | Subtle lavender counter-wash inside focal cards |
@@ -42,7 +42,7 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
 | `border` | `#DCDFDA` | `#2E322E` | 1pt hairlines and card outlines |
 | `ink` | `#101211` | `#F3F4F2` | Primary titles and solid pill CTA fill (light) |
 | `muted` | `#5C605D` | `#A0A5A0` | Addresses, section headers, and secondary copy |
-| `signal` | `#C87316` | `#E69B42` | Active accent, match reason labels, selected pin/switch |
+| `signal` | `#C87316` | `#E69B42` | Active accent, step marker, selected pin/switch |
 | `leaveBy` | `#1D8150` | `#4CC38A` | Leave-by timing emphasis |
 | `causticWarm` | `#E8A54C` | `#DF9A44` | Subtle sunlit amber wash inside focal cards |
 | `causticCool` | `#8272CC` | `#988AD8` | Faint cool counter-wash inside focal cards |
@@ -54,7 +54,9 @@ Cool London limestone mineral surface warmed by sunlit honey-amber highlights.
 - **Secondary copy:** SF Pro Text Regular (`.subheadline`, `muted`).
 - **Timing & micro-labels:** SF Mono / `.monospacedDigit()` for leave-by times and compact metadata.
 - **Corner radii:** `999pt` (`Capsule`) for search bar and primary action pills; `20pt` for focal cards; `16pt` for grouped row containers.
-- **Atlas index:** Live Nearby rows read like an atlas index. A numbered `IndexMarker` matches the place's map pin (ink outline; filled `signal` when selected), the name runs on a `DotLeader` to its straight-line distance, and the line below gives category and street with any interest match inline. Sample places show their leave-by time in a right-aligned tabular column.
+- **Atlas index:** Live Nearby rows read like an atlas index. A numbered `IndexMarker` matches the place's map pin (ink outline; filled `signal` when selected), the name runs on a `DotLeader` to its straight-line distance, and the line below gives category and street. Sample places show their leave-by time in a right-aligned tabular column.
+- **Onboarding:** Three skippable screens on the `LaunchBackground` colour, marked by a monospaced `● ○ ○` step line in `signal`: a welcome, **What are you looking for?** (a two-column grid of kinds, one column at accessibility text sizes), and why Salio uses location, which comes before iOS's own prompt. Finishing tears the opening open onto the filtered feed.
+- **Kind filter:** Nearby shows only the saved kinds, nearest first. A row of `KindChip` capsules under the search bar changes them for this session only, with **Reset** back to the saved choice; Profile → What you're looking for changes them for good. When a filter finds nothing, the feed says so and offers **Show everything**. Search is never filtered.
 - **Touch targets:** At least `44×44pt` for toolbar buttons and map pins.
 - **iPhone Duo book layout:** When unfolded, Salio reads the fold from the display's division region and splits the inner display 50/50 like an open book. The right page keeps the closed cover's Nearby feed and toolbar, so cards, line wraps, and rhythm carry across the fold. The left page pairs a muted Apple Map crop (`240pt`) with the frosted Timing / Place details card (`Open in Maps` for live places) and an **Also nearby** list of the three places closest to the selection, with distances. iPad and other regular-width windows keep the balanced split view with a `270–340pt` context column.
 
