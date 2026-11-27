@@ -273,6 +273,32 @@ final class SalioUITests: XCTestCase {
         XCTAssertEqual(searchCount(in: app), 1)
     }
 
+    func testOpeningHoldsThroughASlowFirstLoadAndOpensWhenItLands() {
+        // The stub takes 6s, past both the old 2s cap and the first 5s variation.
+        let app = launch(arguments: ["-SALIOStubSearch", "-SALIOStubLocation", "-SALIOShowSearchCount",
+                                     "-SALIOStubSearchDelay", "6", "-SALIOShowOpening"])
+        let opening = app.otherElements["salio-opening"]
+        XCTAssertTrue(opening.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 3)
+        XCTAssertTrue(opening.exists)
+        XCTAssertFalse(app.buttons["stub-cafe"].exists)
+
+        XCTAssertTrue(app.buttons["stub-cafe"].waitForExistence(timeout: 10))
+        XCTAssertTrue(opening.waitForNonExistence(timeout: 2))
+        XCTAssertEqual(searchCount(in: app), 1)
+    }
+
+    func testTappingTheOpeningReleasesItDuringASlowFirstLoad() {
+        let app = launch(arguments: ["-SALIOStubSearch", "-SALIOStubLocation",
+                                     "-SALIOStubSearchDelay", "60", "-SALIOShowOpening"])
+        let opening = app.otherElements["salio-opening"]
+        XCTAssertTrue(opening.waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(opening.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(searchField(in: app).exists)
+        XCTAssertFalse(app.buttons["stub-cafe"].exists)
+    }
+
     private func launch(arguments: [String]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += arguments

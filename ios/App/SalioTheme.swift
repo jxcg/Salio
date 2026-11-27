@@ -591,7 +591,8 @@ struct IndexMarker: View {
 /// colour mix bursts the launch screen open onto the feed, riding one refraction wave, with no fade.
 /// It only tears through to the feed once the feed's first load is final, so it never shows data that is
 /// about to change. While Nearby is still loading, the ring breathes on the closed sheet; if the load is
-/// done in time it tears open, and after `maxWait` or a tap it bursts across the closed sheet and fades.
+/// done in time it tears open, and a load with nothing to show, or a tap, bursts it across the closed sheet
+/// and fades. It waits as long as the first load takes, varying its shape and colours every 5 seconds.
 /// Its colours follow light and dark but not the theme, because the launch screen before it can't know
 /// the theme. Under Reduce Motion, VoiceOver or Increase Contrast, the launch colour simply fades.
 struct SalioOpening: View {
@@ -622,20 +623,20 @@ struct SalioOpening: View {
     @AppStorage(Style.storageKey) private var style: Style = .tear
     /// Set once the app is active, after iOS's launch zoom, so the reveal plays where it can be seen.
     @State private var start: Date?
-    /// When the ring was released: the feed became ready, `maxWait` passed, or someone tapped.
+    /// When the ring was released: the feed became ready or someone tapped.
     @State private var releasedAt: Date?
     /// Whether the release tears open onto the feed, which only happens once the feed is ready.
     @State private var tears = false
     @State private var fading = false
-    /// Shape and colours are picked once per launch, independently of each other.
-    @State private var shape = AsciiReveal.Shape.allCases.randomElement() ?? .starburst
-    @State private var accents = Self.mixes.randomElement() ?? Self.mixes[0]
+    /// Seeds this launch's shapes and colour mixes, which are picked independently of each other.
+    @State private var seed = UInt64.random(in: .min ... .max)
 
     private static let duration: TimeInterval = 0.6
-    /// The longest the ring breathes before tearing open anyway.
-    private static let maxWait: TimeInterval = 2
     /// While waiting, the ring grows to `hold` at its normal speed, then breathes around it.
     private static let hold = 0.14, breath = 0.035, breathPeriod: TimeInterval = 1.1
+    /// A first load shouldn't take this long, so every `variationPeriod` of waiting the reveal morphs to
+    /// a new shape and colour mix over `morphTime`, to show it is still alive.
+    static let variationPeriod: TimeInterval = 5, morphTime: TimeInterval = 0.8
     /// Accent colours as (dark, light) pairs: prism, ember, and tide.
     private static let mixes: [[(dark: UInt32, light: UInt32)]] = [
         [(0x4CC38A, 0x1D8150), (0x9AA0F5, 0x5A55C8), (0xE69B42, 0xC87316)],
@@ -648,17 +649,28 @@ struct SalioOpening: View {
     }
 
     var body: some View {
-        // Colours are worked out once here, so each frame only computes progress.
         let dark = colorScheme == .dark
         let dots = Color(hex: dark ? 0x2A2C38 : 0xD6D8E2)
         let core = Color(hex: dark ? 0xE4E6FF : 0x2E2A78)
-        let inks = accents.map { Color(hex: dark ? $0.dark : $0.light) }
         TimelineView(.animation(paused: !animates || start == nil)) { timeline in
             let progress = start.map { progress(at: timeline.date, from: $0) } ?? 0
+            // The variation stops changing once the ring is released, so the burst keeps its last look.
+            let waited = start.map { min(timeline.date, release(from: $0)).timeIntervalSince($0) } ?? 0
+            let (epoch, morph) = Self.variation(after: waited)
+            let shapes = AsciiReveal.Shape.allCases, count = Self.mixes.count
+            let shape = shapes[Self.pick(epoch, of: shapes.count, seed: seed)]
+            let previous = epoch > 0 ? shapes[Self.pick(epoch - 1, of: shapes.count, seed: seed)] : nil
+            let mix = Self.mixes[Self.pick(epoch, of: count, seed: ~seed)]
+            let mixBefore = epoch > 0 ? Self.mixes[Self.pick(epoch - 1, of: count, seed: ~seed)] : mix
+            let inks = zip(mixBefore, mix).map { before, after in
+                Color(hex: dark ? before.dark : before.light).mix(with: Color(hex: dark ? after.dark : after.light), by: morph)
+            }
             if animates {
                 AsciiReveal(
                     progress: progress,
                     shape: shape,
+                    previous: previous,
+                    morph: morph,
                     cover: Color("LaunchBackground"),
                     dots: dots,
                     core: core,
@@ -704,9 +716,7 @@ struct SalioOpening: View {
             guard let start else { return }
             do {
                 if animates, releasedAt == nil {
-                    // Stop waiting after `maxWait` and leave the feed's own loader to carry on.
-                    try await Task.sleep(for: .seconds(max((start + Self.maxWait).timeIntervalSinceNow, 0)))
-                    releasedAt = .now
+                    // Keep breathing until the first load is final or someone taps.
                     return
                 } else if animates, tears {
                     // The reveal draws nothing once it ends, so the opening can just leave.
@@ -744,5 +754,30 @@ struct SalioOpening: View {
         let rise = hold * duration
         guard elapsed > rise else { return max(elapsed, 0) / duration }
         return hold + breath * sin((elapsed - rise) / breathPeriod * 2 * .pi)
+    }
+
+    /// Which variation is showing after `waited` seconds, and how far (0 to 1) it has morphed in from the
+    /// one before. The first variation is fully in from the start.
+    static func variation(after waited: TimeInterval) -> (epoch: Int, morph: Double) {
+        let epoch = Int(max(waited, 0) / variationPeriod)
+        guard epoch > 0 else { return (0, 1) }
+        return (epoch, min((waited - Double(epoch) * variationPeriod) / morphTime, 1))
+    }
+
+    /// One of `count` options for a variation: random per launch, but never the same as the one before.
+    static func pick(_ epoch: Int, of count: Int, seed: UInt64) -> Int {
+        var choice = Int(splitMix(seed) % UInt64(count))
+        for step in stride(from: 1, through: epoch, by: 1) where count > 1 {
+            choice = (choice + 1 + Int(splitMix(seed &+ UInt64(step)) % UInt64(count - 1))) % count
+        }
+        return choice
+    }
+
+    /// SplitMix64, so each variation is a stable function of the launch's seed.
+    private static func splitMix(_ value: UInt64) -> UInt64 {
+        var h = value &+ 0x9E37_79B9_7F4A_7C15
+        h = (h ^ (h >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        h = (h ^ (h >> 27)) &* 0x94D0_49BB_1331_11EB
+        return h ^ (h >> 31)
     }
 }

@@ -38,6 +38,9 @@ struct AsciiReveal: View {
 
     var progress: Double
     var shape: Shape = .starburst
+    /// A shape the front is morphing from, `morph` of the way (0 to 1) towards `shape`.
+    var previous: Shape?
+    var morph = 1.0
     /// The sheet's colour, usually the launch screen's background.
     var cover: Color
     /// The sheet's faint dot grid.
@@ -83,7 +86,10 @@ struct AsciiReveal: View {
             for col in 0..<columns {
                 let p = point(row, col), hash = Self.hash(row: row, col: col)
                 let jitter = Double(hash % 100) / 100 * 1.5 * cell / diagonal
-                reach.append(shape.distance((p.x - centre.x) / diagonal, (p.y - centre.y) / diagonal) + jitter)
+                let x = (p.x - centre.x) / diagonal, y = (p.y - centre.y) / diagonal
+                let distance = shape.distance(x, y)
+                let blended = previous.map { $0.distance(x, y) + (distance - $0.distance(x, y)) * morph } ?? distance
+                reach.append(blended + jitter)
                 hashes.append(hash)
             }
         }
