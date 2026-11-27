@@ -15,7 +15,6 @@ struct OnboardingView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .subheadline) private var iconWidth = 22.0
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @State private var step = 0
     @State private var kinds: Set<String> = []
@@ -31,6 +30,8 @@ struct OnboardingView: View {
                 .font(.system(.footnote, design: .monospaced))
                 .foregroundStyle(palette.signal)
                 .accessibilityLabel("Step \(step + 1) of 3")
+                // Decorative, and VoiceOver reads the label, so it stops growing at large text sizes.
+                .dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .padding(.top, 24)
 
             ScrollView {
@@ -43,10 +44,20 @@ struct OnboardingView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 28)
-                .id(step)
-                .transition(.opacity)
             }
+            // A new scroll view per step, so each screen starts at its title.
+            .id(step)
+            .transition(.opacity)
             .scrollBounceBehavior(.basedOnSize)
+            // Scrolled content fades out at both edges instead of being cut off. The fades sit
+            // inside the content's own padding, so nothing is faded until it scrolls.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 28)
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 28)
+                }
+            }
 
             actions
         }
@@ -78,19 +89,19 @@ struct OnboardingView: View {
                     Button {
                         if selected { kinds.remove(kind.name) } else { kinds.insert(kind.name) }
                     } label: {
-                        // A fixed-width icon column keeps every name starting at the same edge; at
-                        // accessibility sizes the icon sits above the name so long names keep the width.
-                        let layout = dynamicTypeSize.isAccessibilitySize
-                            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-                            : AnyLayout(HStackLayout(spacing: 10))
-                        layout {
-                            Image(systemName: kind.symbol).frame(width: iconWidth)
+                        HStack(spacing: 10) {
+                            // The icon stops growing at large text sizes and sits in a fixed column,
+                            // so every name starts at the same edge and keeps the width it needs.
+                            Image(systemName: kind.symbol)
+                                .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                                .frame(width: 36)
                             Text(kind.name)
                         }
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(selected ? palette.onCTA : palette.ink)
                         .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
                         .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
                         .background(selected ? palette.ink : palette.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -143,6 +154,10 @@ struct OnboardingView: View {
                 secondary("Not now", id: "onboarding-skip") { onFinish(false) }
             }
         }
+        // Keeps the buttons from crowding out the choices at the largest text sizes,
+        // and leaves a gap so scrolled content never runs into them.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+        .padding(.top, 12)
     }
 
     private func primary(_ title: String, id: String, action: @escaping () -> Void) -> some View {
