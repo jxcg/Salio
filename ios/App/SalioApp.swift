@@ -1230,7 +1230,18 @@ private struct FeedView: View {
         let searchCount = search.searchCount
         locating = true
         defer { locating = false }
-        center = await currentLocation()
+        // A location that never arrives (an unanswered prompt, no fix) counts as none after
+        // `locationTimeout`, so neither the opening nor the feed's loader waits forever.
+        center = await withTaskGroup(of: CLLocationCoordinate2D?.self) { group in
+            group.addTask { await currentLocation() }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(Self.locationTimeout))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
         guard !Task.isCancelled else { return }
         didLocate = true
         guard let center, search.searchCount == searchCount, !initial || searchCount == 0 else { return }
@@ -1240,9 +1251,15 @@ private struct FeedView: View {
         await search.loadNearby(near: center, matching: interests)
     }
 
+    private static let locationTimeout: TimeInterval = 12
+
     private func currentLocation() async -> CLLocationCoordinate2D? {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-SALIOStubLocationNever") {
+            try? await Task.sleep(for: .seconds(3600))
+            return nil
+        }
         if arguments.contains("-SALIOStubLocation") {
             return StubPlaceSearcher.fixedPlaces[0].coordinate
         }

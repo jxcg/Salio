@@ -88,7 +88,7 @@ struct AsciiReveal: View {
                 let jitter = Double(hash % 100) / 100 * 1.5 * cell / diagonal
                 let x = (p.x - centre.x) / diagonal, y = (p.y - centre.y) / diagonal
                 let distance = shape.distance(x, y)
-                let blended = previous.map { $0.distance(x, y) + (distance - $0.distance(x, y)) * morph } ?? distance
+                let blended = previous.map { let from = $0.distance(x, y); return from + (distance - from) * morph } ?? distance
                 reach.append(blended + jitter)
                 hashes.append(hash)
             }

@@ -712,7 +712,7 @@ struct SalioOpening: View {
             tears = style == .tear && found
             releasedAt = .now
         }
-        .task(id: [start, releasedAt]) {
+        .task(id: [start, releasedAt, animates] as [AnyHashable?]) {
             guard let start else { return }
             do {
                 if animates, releasedAt == nil {

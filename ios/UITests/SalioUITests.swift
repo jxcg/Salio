@@ -274,16 +274,16 @@ final class SalioUITests: XCTestCase {
     }
 
     func testOpeningHoldsThroughASlowFirstLoadAndOpensWhenItLands() {
-        // The stub takes 6s, past both the old 2s cap and the first 5s variation.
+        // The stub takes 12s, past the old 2s cap and two 5s variations.
         let app = launch(arguments: ["-SALIOStubSearch", "-SALIOStubLocation", "-SALIOShowSearchCount",
-                                     "-SALIOStubSearchDelay", "6", "-SALIOShowOpening"])
+                                     "-SALIOStubSearchDelay", "12", "-SALIOShowOpening"])
         let opening = app.otherElements["salio-opening"]
         XCTAssertTrue(opening.waitForExistence(timeout: 5))
-        Thread.sleep(forTimeInterval: 3)
+        Thread.sleep(forTimeInterval: 7)
         XCTAssertTrue(opening.exists)
         XCTAssertFalse(app.buttons["stub-cafe"].exists)
 
-        XCTAssertTrue(app.buttons["stub-cafe"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["stub-cafe"].waitForExistence(timeout: 15))
         XCTAssertTrue(opening.waitForNonExistence(timeout: 2))
         XCTAssertEqual(searchCount(in: app), 1)
     }
@@ -297,6 +297,17 @@ final class SalioUITests: XCTestCase {
         XCTAssertTrue(opening.waitForNonExistence(timeout: 3))
         XCTAssertTrue(searchField(in: app).exists)
         XCTAssertFalse(app.buttons["stub-cafe"].exists)
+    }
+
+    func testOpeningReleasesWhenLocationNeverArrives() {
+        let app = launch(arguments: ["-SALIOStubSearch", "-SALIOStubLocationNever", "-SALIOShowOpening"])
+        let opening = app.otherElements["salio-opening"]
+        XCTAssertTrue(opening.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 6)
+        XCTAssertTrue(opening.exists)
+        // After the 12s location timeout it bursts and fades onto the no-location feed.
+        XCTAssertTrue(opening.waitForNonExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["turn-on-location"].waitForExistence(timeout: 5))
     }
 
     private func launch(arguments: [String]) -> XCUIApplication {

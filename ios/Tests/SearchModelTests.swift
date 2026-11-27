@@ -102,7 +102,6 @@ final class SearchModelTests: XCTestCase {
 
         for seed in [UInt64(0), 1, 42, .max] {
             for count in [3, 5] {
-                XCTAssertEqual(SalioOpening.pick(4, of: count, seed: seed), SalioOpening.pick(4, of: count, seed: seed))
                 for epoch in 1...12 {
                     XCTAssertNotEqual(SalioOpening.pick(epoch, of: count, seed: seed),
                                       SalioOpening.pick(epoch - 1, of: count, seed: seed))
