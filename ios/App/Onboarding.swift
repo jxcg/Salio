@@ -33,6 +33,7 @@ struct OnboardingView: View {
                 // Decorative, and VoiceOver reads the label, so it stops growing at large text sizes.
                 .dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .padding(.top, 24)
+                .padding(.horizontal, 24)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -44,6 +45,8 @@ struct OnboardingView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 28)
+                // Padding inside the scroll view, so its scroll bar sits in the margin, not on the cards.
+                .padding(.horizontal, 24)
             }
             // A new scroll view per step, so each screen starts at its title.
             .id(step)
@@ -60,8 +63,8 @@ struct OnboardingView: View {
             }
 
             actions
+                .padding(.horizontal, 24)
         }
-        .padding(.horizontal, 24)
         .padding(.bottom, 12)
         .frame(maxWidth: 520)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -80,41 +83,51 @@ struct OnboardingView: View {
     private var kindPicker: some View {
         VStack(alignment: .leading, spacing: 20) {
             heading("What are you looking for?", "Nearby only shows these. Choose as many as you like, or skip to see everything.")
-            // One column at accessibility text sizes, so names wrap between words, not inside them.
-            LazyVGrid(columns: dynamicTypeSize.isAccessibilitySize
-                      ? [GridItem(.flexible())]
-                      : [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
-                ForEach(Preferences.kinds, id: \.name) { kind in
-                    let selected = kinds.contains(kind.name)
-                    Button {
-                        if selected { kinds.remove(kind.name) } else { kinds.insert(kind.name) }
-                    } label: {
-                        HStack(spacing: 10) {
-                            // The icon stops growing at large text sizes and sits in a fixed column,
-                            // so every name starts at the same edge and keeps the width it needs.
-                            Image(systemName: kind.symbol)
-                                .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-                                .frame(width: 36)
-                            Text(kind.name)
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(selected ? palette.onCTA : palette.ink)
-                        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(selected ? palette.ink : palette.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .strokeBorder(palette.border, lineWidth: selected ? 0 : 1)
-                        )
-                        .contentShape(Rectangle())
+            // Two columns, or one at accessibility text sizes so names wrap between words. A plain
+            // grid, not a lazy one: there are only six cards, and all of them exist for VoiceOver.
+            let columns = dynamicTypeSize.isAccessibilitySize ? 1 : 2
+            let all = Preferences.kinds
+            Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                ForEach(Array(stride(from: 0, to: all.count, by: columns)), id: \.self) { first in
+                    GridRow {
+                        ForEach(all[first..<min(first + columns, all.count)], id: \.name) { kindButton($0.name, symbol: $0.symbol) }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selected ? .isSelected : [])
-                    .accessibilityIdentifier("onboarding-kind-\(kind.name)")
                 }
             }
         }
+    }
+
+    private func kindButton(_ name: String, symbol: String) -> some View {
+        let selected = kinds.contains(name)
+        return Button {
+            if selected { kinds.remove(name) } else { kinds.insert(name) }
+        } label: {
+            HStack(spacing: 10) {
+                // The icon stops growing at large text sizes and sits in a fixed column,
+                // so every name starts at the same edge and keeps the width it needs.
+                Image(systemName: symbol)
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                    .frame(width: 36)
+                Text(name)
+                    // Still very large, but leaves room for the choices to fit.
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility3)
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(selected ? palette.onCTA : palette.ink)
+            // Fills the row's height, so the two cards in a row always match.
+            .frame(maxWidth: .infinity, minHeight: 52, maxHeight: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(selected ? palette.ink : palette.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(palette.border, lineWidth: selected ? 0 : 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("onboarding-kind-\(name)")
     }
 
     private var location: some View {
