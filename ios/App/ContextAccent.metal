@@ -2,17 +2,17 @@
 #include <SwiftUI/SwiftUI_Metal.h>
 using namespace metal;
 
-static half sampleFrostedChannel(SwiftUI::Layer layer, float2 p, float blur, int channel) {
+// A soft sample of the whole pixel, colour and coverage together, so edges stay consistent.
+static half4 sampleFrosted(SwiftUI::Layer layer, float2 p, float blur) {
     if (blur < 0.25f) {
-        return layer.sample(p)[channel];
+        return layer.sample(p);
     }
-    half center = layer.sample(p)[channel] * half(0.34f);
-    half surround =
-        layer.sample(p + float2(-blur, 0.0f))[channel] +
-        layer.sample(p + float2( blur, 0.0f))[channel] +
-        layer.sample(p + float2(0.0f, -blur))[channel] +
-        layer.sample(p + float2(0.0f,  blur))[channel];
-    return center + surround * half(0.165f);
+    half4 surround =
+        layer.sample(p + float2(-blur, 0.0f)) +
+        layer.sample(p + float2( blur, 0.0f)) +
+        layer.sample(p + float2(0.0f, -blur)) +
+        layer.sample(p + float2(0.0f,  blur));
+    return layer.sample(p) * half(0.34f) + surround * half(0.165f);
 }
 
 [[ stitchable ]] half4 frostedRefraction(
@@ -39,14 +39,15 @@ static half sampleFrostedChannel(SwiftUI::Layer layer, float2 p, float blur, int
 
     // Natural optical dispersion: R bends slightly less than G, B bends slightly more.
     // `dispersion` scales the split, where 1 is a gentle fringe.
-    half r = sampleFrostedChannel(layer, position - offset * (1.0f - 0.28f * dispersion), blur, 0);
-    half g = sampleFrostedChannel(layer, position - offset, blur, 1);
-    half b = sampleFrostedChannel(layer, position - offset * (1.0f + 0.30f * dispersion), blur, 2);
-    half a = layer.sample(position).a;
-
-    half glaze = half(wave * 0.045f);
-    return half4(clamp(r + glaze, half(0.0h), half(1.0h)),
-                 clamp(g + glaze, half(0.0h), half(1.0h)),
-                 clamp(b + glaze, half(0.0h), half(1.0h)),
-                 a);
+    half4 red = sampleFrosted(layer, position - offset * (1.0f - 0.28f * dispersion), blur);
+    half4 green = sampleFrosted(layer, position - offset, blur);
+    half4 blue = sampleFrosted(layer, position - offset * (1.0f + 0.30f * dispersion), blur);
+    // SwiftUI layers are premultiplied, so splitting channels is only sound where all three samples
+    // agree on coverage. Across a see-through edge, use the green sample whole instead, so the edge
+    // refracts without stepped black or coloured fringes.
+    half edge = max(abs(red.a - green.a), abs(blue.a - green.a));
+    half4 colour = mix(half4(red.r, green.g, blue.b, green.a), green, edge);
+    half a = colour.a;
+    half3 rgb = colour.rgb + half(wave * 0.045f) * a;
+    return half4(min(rgb, half3(a)), a);
 }
