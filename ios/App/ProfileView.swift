@@ -32,6 +32,7 @@ struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
+    @AppStorage(SalioOpening.Style.storageKey) private var openingStyle: SalioOpening.Style = .tear
     @Query private var saved: [Preferences]
     @State private var interests: Set<String> = []
     @State private var budget: String?
@@ -86,6 +87,13 @@ struct ProfileView: View {
                         }
                         .accessibilityValue(appearance.displayName)
                         .accessibilityIdentifier("profile-theme")
+                        Picker("Opening", selection: $openingStyle) {
+                            ForEach(SalioOpening.Style.allCases) { option in
+                                Text(option.displayName).tag(option)
+                            }
+                        }
+                        .accessibilityValue(openingStyle.displayName)
+                        .accessibilityIdentifier("profile-opening")
                     }
                     .listRowBackground(palette.card)
 

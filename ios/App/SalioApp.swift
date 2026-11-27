@@ -9,8 +9,23 @@ struct SalioApp: App {
         try ModelContainer(for: Preferences.self, configurations: Self.profileStore)
     }
 
+    /// App state survives backgrounding, so the opening plays on cold launches only.
+    @State private var showsOpening = true
+    @State private var feedReady = false
+    @State private var feedFound = false
+
     var body: some Scene {
-        WindowGroup { FeedView(profileContainer: profileContainer) }
+        WindowGroup {
+            FeedView(profileContainer: profileContainer) { found in
+                feedFound = found
+                feedReady = true
+            }
+            .overlay {
+                if showsOpening {
+                    SalioOpening(ready: feedReady, found: feedFound) { showsOpening = false }
+                }
+            }
+        }
     }
 
     private static var profileStore: ModelConfiguration {
@@ -372,6 +387,9 @@ private struct FeedView: View {
     }
 
     let profileContainer: Result<ModelContainer, any Error>
+    /// Called once the first Nearby load has finished, with whether it found places. It is also called
+    /// when the load failed, found nothing, or had no location.
+    var onFirstLoad: (_ found: Bool) -> Void = { _ in }
     private let entries = FeedEntry.samples
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -511,6 +529,7 @@ private struct FeedView: View {
         .task {
             syncRailCamera()
             await locate(initial: true)
+            onFirstLoad(search.status == .results)
         }
         .onChange(of: search.results) {
             camera = .automatic
@@ -958,7 +977,8 @@ private struct FeedView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 railMap
-                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey)
+                    // Already showing when the opening tears onto it, so it only reveals a new selection.
+                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey, revealsOnAppear: false)
                     .frame(height: foldOffset == nil ? 180 : 240)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay(

@@ -173,7 +173,8 @@ struct RefractedReticleSurface: View {
                             .float(Float(eased * maxRadius)),
                             .float(34),
                             .float(strength),
-                            .float(2.6)
+                            .float(2.6),
+                            .float(1)
                         ),
                         maxSampleOffset: CGSize(width: 20, height: 20),
                         isEnabled: active
@@ -364,12 +365,15 @@ struct FrostedGlassCard<Content: View>: View {
 struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
     let palette: SalioPalette
     let trigger: Trigger
+    /// Whether the reveal also plays when the map first appears, not only when `trigger` changes.
+    let revealsOnAppear: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorSchemeContrast) private var contrast
     @State private var revealStart: Date?
     @State private var isRevealing = false
+    @State private var appeared = false
 
     private let duration: TimeInterval = 0.85
 
@@ -400,7 +404,9 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
                 }
         }
         .task(id: trigger) {
-            guard allowsReveal else {
+            let firstRun = !appeared
+            appeared = true
+            guard allowsReveal, revealsOnAppear || !firstRun else {
                 isRevealing = false
                 revealStart = nil
                 return
@@ -457,9 +463,10 @@ private struct AsciiVeil: View, Equatable {
 extension View {
     func mapBlurReveal<Trigger: Equatable>(
         palette: SalioPalette,
-        trigger: Trigger
+        trigger: Trigger,
+        revealsOnAppear: Bool = true
     ) -> some View {
-        modifier(MapBlurRevealModifier(palette: palette, trigger: trigger))
+        modifier(MapBlurRevealModifier(palette: palette, trigger: trigger, revealsOnAppear: revealsOnAppear))
     }
 }
 
@@ -577,5 +584,165 @@ struct IndexMarker: View {
             }
         }
         .accessibilityHidden(true)
+    }
+}
+
+/// Salio's first moment on a cold launch: once the app is active, an `AsciiReveal` in a random shape and
+/// colour mix bursts the launch screen open onto the feed, riding one refraction wave, with no fade.
+/// It only tears through to the feed once the feed's first load is final, so it never shows data that is
+/// about to change. While Nearby is still loading, the ring breathes on the closed sheet; if the load is
+/// done in time it tears open, and after `maxWait` or a tap it bursts across the closed sheet and fades.
+/// Its colours follow light and dark but not the theme, because the launch screen before it can't know
+/// the theme. Under Reduce Motion, VoiceOver or Increase Contrast, the launch colour simply fades.
+struct SalioOpening: View {
+    /// How the opening hands over to a feed that is ready. While the feed is still loading, both fade.
+    enum Style: String, CaseIterable, Identifiable {
+        /// The burst tears the launch screen open onto the results.
+        case tear
+        /// The burst runs across the closed launch screen, which then fades onto the results.
+        case fade
+
+        var id: String { rawValue }
+        var displayName: String { self == .tear ? "Tear open" : "Burst and fade" }
+        static var storageKey: String { SalioTestStore.scopedKey("salioOpeningStyle") }
+    }
+
+    /// Whether the feed has finished its first load.
+    let ready: Bool
+    /// Whether that load found places. Only then does Tear open uncover the feed; a failure, no results,
+    /// or no location fades instead, so the tear never lands on an empty or error state.
+    let found: Bool
+    let onFinish: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(Style.storageKey) private var style: Style = .tear
+    /// Set once the app is active, after iOS's launch zoom, so the reveal plays where it can be seen.
+    @State private var start: Date?
+    /// When the ring was released: the feed became ready, `maxWait` passed, or someone tapped.
+    @State private var releasedAt: Date?
+    /// Whether the release tears open onto the feed, which only happens once the feed is ready.
+    @State private var tears = false
+    @State private var fading = false
+    /// Shape and colours are picked once per launch, independently of each other.
+    @State private var shape = AsciiReveal.Shape.allCases.randomElement() ?? .starburst
+    @State private var accents = Self.mixes.randomElement() ?? Self.mixes[0]
+
+    private static let duration: TimeInterval = 0.6
+    /// The longest the ring breathes before tearing open anyway.
+    private static let maxWait: TimeInterval = 2
+    /// While waiting, the ring grows to `hold` at its normal speed, then breathes around it.
+    private static let hold = 0.14, breath = 0.035, breathPeriod: TimeInterval = 1.1
+    /// Accent colours as (dark, light) pairs: prism, ember, and tide.
+    private static let mixes: [[(dark: UInt32, light: UInt32)]] = [
+        [(0x4CC38A, 0x1D8150), (0x9AA0F5, 0x5A55C8), (0xE69B42, 0xC87316)],
+        [(0xE69B42, 0xC87316), (0xE8805A, 0xC4562E), (0xB7AEDD, 0x6A5BB3)],
+        [(0x4CC38A, 0x1D8150), (0x9586E0, 0x7666C6), (0x9CA2B3, 0x5A5F6C)],
+    ]
+
+    private var animates: Bool {
+        !reduceMotion && !voiceOver && contrast != .increased
+    }
+
+    var body: some View {
+        // Colours are worked out once here, so each frame only computes progress.
+        let dark = colorScheme == .dark
+        let dots = Color(hex: dark ? 0x2A2C38 : 0xD6D8E2)
+        let core = Color(hex: dark ? 0xE4E6FF : 0x2E2A78)
+        let inks = accents.map { Color(hex: dark ? $0.dark : $0.light) }
+        TimelineView(.animation(paused: !animates || start == nil)) { timeline in
+            let progress = start.map { progress(at: timeline.date, from: $0) } ?? 0
+            if animates {
+                AsciiReveal(
+                    progress: progress,
+                    shape: shape,
+                    cover: Color("LaunchBackground"),
+                    dots: dots,
+                    core: core,
+                    accents: inks,
+                    opens: tears
+                )
+                .visualEffect { content, proxy in
+                    let reach = hypot(proxy.size.width, proxy.size.height)
+                    return content.layerEffect(
+                        ShaderLibrary.frostedRefraction(
+                            .float2(proxy.size.width / 2, proxy.size.height / 2),
+                            .float((1 - pow(1 - progress, 3)) * reach * 0.62),
+                            .float(64),
+                            .float(sin(progress * .pi) * 0.85),
+                            .float(1.8),
+                            // A stronger colour split than the cards' ripple, so the pulse reads as glass.
+                            .float(1.6)
+                        ),
+                        maxSampleOffset: CGSize(width: 20, height: 20),
+                        isEnabled: progress > 0 && progress < 1
+                    )
+                }
+            } else {
+                Color("LaunchBackground")
+            }
+        }
+        .ignoresSafeArea()
+        .opacity(fading ? 0 : 1)
+        // While the ring waits, a tap releases it instead of reaching the feed hidden underneath.
+        .contentShape(.rect)
+        .onTapGesture { releasedAt = releasedAt ?? .now }
+        .allowsHitTesting(animates && releasedAt == nil)
+        .accessibilityHidden(true)
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active, start == nil { start = .now }
+        }
+        .onChange(of: ready, initial: true) {
+            guard ready, releasedAt == nil else { return }
+            tears = style == .tear && found
+            releasedAt = .now
+        }
+        .task(id: [start, releasedAt]) {
+            guard let start else { return }
+            do {
+                if animates, releasedAt == nil {
+                    // Stop waiting after `maxWait` and leave the feed's own loader to carry on.
+                    try await Task.sleep(for: .seconds(max((start + Self.maxWait).timeIntervalSinceNow, 0)))
+                    releasedAt = .now
+                    return
+                } else if animates, tears {
+                    // The reveal draws nothing once it ends, so the opening can just leave.
+                    let release = release(from: start)
+                    let end = release + (1 - Self.waiting(release.timeIntervalSince(start))) * Self.duration
+                    try await Task.sleep(for: .seconds(max(end.timeIntervalSinceNow, 0)))
+                } else {
+                    // The feed isn't final yet (or motion is reduced), so fade the closed sheet instead of
+                    // tearing it; the burst carries on outward while it fades.
+                    let fade = animates ? Self.duration : 0.2
+                    withAnimation(.easeOut(duration: fade)) { fading = true }
+                    try await Task.sleep(for: .seconds(fade))
+                }
+                onFinish()
+            } catch {
+                // Cancelled because the ring was released; the next run of this task finishes instead.
+            }
+        }
+    }
+
+    /// When the ring stops waiting: once released, but never before the opening starts.
+    private func release(from start: Date) -> Date {
+        max(releasedAt ?? .distantFuture, start)
+    }
+
+    /// The reveal's progress: it grows and breathes until released, then runs on to 1 at its normal speed.
+    private func progress(at date: Date, from start: Date) -> Double {
+        let release = release(from: start)
+        let waited = Self.waiting(min(date, release).timeIntervalSince(start))
+        return min(waited + max(date.timeIntervalSince(release), 0) / Self.duration, 1)
+    }
+
+    /// Progress while waiting: the normal rise up to `hold`, then a slow breath around it.
+    private static func waiting(_ elapsed: TimeInterval) -> Double {
+        let rise = hold * duration
+        guard elapsed > rise else { return max(elapsed, 0) / duration }
+        return hold + breath * sin((elapsed - rise) / breathPeriod * 2 * .pi)
     }
 }

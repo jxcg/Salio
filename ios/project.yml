@@ -16,7 +16,10 @@ targets:
         CFBundleDisplayName: Salio
         NSLocationWhenInUseUsageDescription: Salio uses your location to find places nearby.
         NSLocationDefaultAccuracyReduced: true
-        UILaunchScreen: {}
+        # Lets ProMotion iPhones run animations, such as the opening, at up to 120 fps.
+        CADisableMinimumFrameDurationOnPhone: true
+        UILaunchScreen:
+          UIColorName: LaunchBackground
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -29,6 +32,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(SALIO_BUNDLE_ID)
+        # The catalog only holds the launch colour; Salio has no app icon set yet.
+        ASSETCATALOG_COMPILER_APPICON_NAME: ''
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         SWIFT_VERSION: '6.0'
