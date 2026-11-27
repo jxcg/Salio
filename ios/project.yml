@@ -16,6 +16,8 @@ targets:
         CFBundleDisplayName: Salio
         NSLocationWhenInUseUsageDescription: Salio uses your location to find places nearby.
         NSLocationDefaultAccuracyReduced: true
+        # Lets ProMotion iPhones run animations, such as the opening, at up to 120 fps.
+        CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations:
