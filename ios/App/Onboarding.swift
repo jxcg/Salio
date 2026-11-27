@@ -50,7 +50,7 @@ struct OnboardingView: View {
             }
             // A new scroll view per step, so each screen starts at its title.
             .id(step)
-            .transition(.opacity)
+            .transition(Self.stepChange)
             .scrollBounceBehavior(.basedOnSize)
             // Scrolled content fades out at both edges instead of being cut off. The fades sit
             // inside the content's own padding, so nothing is faded until it scrolls.
@@ -64,6 +64,8 @@ struct OnboardingView: View {
 
             actions
                 .padding(.horizontal, 24)
+                .id(step)
+                .transition(Self.stepChange)
         }
         .padding(.bottom, 12)
         .frame(maxWidth: 520)
@@ -72,6 +74,12 @@ struct OnboardingView: View {
         .background(Color("LaunchBackground").ignoresSafeArea())
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: step)
     }
+
+    /// The old screen fades out before the new one fades in, so the two never overlap.
+    private static let stepChange = AnyTransition.asymmetric(
+        insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.1)),
+        removal: .opacity.animation(.easeIn(duration: 0.1))
+    )
 
     private var welcome: some View {
         heading(
@@ -107,6 +115,8 @@ struct OnboardingView: View {
                 // so every name starts at the same edge and keeps the width it needs.
                 Image(systemName: symbol)
                     .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                    // A small hop when it's chosen.
+                    .symbolEffect(.bounce, options: .speed(1.4), value: selected)
                     .frame(width: 36)
                 Text(name)
                     // Still very large, but leaves room for the choices to fit.
@@ -125,7 +135,8 @@ struct OnboardingView: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressStyle())
+        .sensoryFeedback(.selection, trigger: selected)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("onboarding-kind-\(name)")
     }
@@ -179,7 +190,7 @@ struct OnboardingView: View {
             .foregroundStyle(palette.onCTA)
             .frame(maxWidth: .infinity, minHeight: 52)
             .background(palette.ink, in: Capsule())
-            .buttonStyle(.plain)
+            .buttonStyle(PressStyle(scale: 0.97))
             .accessibilityIdentifier(id)
     }
 
@@ -188,7 +199,7 @@ struct OnboardingView: View {
             .font(.subheadline.weight(.medium))
             .foregroundStyle(palette.ink)
             .frame(maxWidth: .infinity, minHeight: 44)
-            .buttonStyle(.plain)
+            .buttonStyle(PressStyle(scale: 0.94))
             .accessibilityIdentifier(id)
     }
 
@@ -226,7 +237,28 @@ struct KindChip: View {
             .overlay(Capsule().strokeBorder(palette.border, lineWidth: selected ? 0 : 1))
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressStyle(scale: 0.92))
+        .sensoryFeedback(.selection, trigger: selected)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Shrinks a button a little while it's held and springs back, slightly past full size, when
+/// it's let go, so taps feel physical. Smaller controls take a deeper `scale`, so they read as
+/// pressed too. Under Reduce Motion the button dims instead of moving.
+struct PressStyle: ButtonStyle {
+    var scale: CGFloat = 0.96
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed
+        // The spring only moves the size and dimming here, never the button's own colours or layout.
+        configuration.label
+            .animation(pressed ? .easeOut(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.55)) { content in
+                content
+                    .scaleEffect(pressed && !reduceMotion ? scale : 1)
+                    .opacity(pressed && reduceMotion ? 0.6 : 1)
+            }
     }
 }
