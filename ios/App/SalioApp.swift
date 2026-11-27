@@ -23,6 +23,15 @@ struct SalioApp: App {
             .overlay {
                 if showsOpening {
                     SalioOpening(ready: feedReady, found: feedFound) { showsOpening = false }
+                    #if DEBUG
+                    // The opening hides itself from accessibility, so UI tests see it through this marker.
+                    if ProcessInfo.processInfo.arguments.contains("-SALIOShowOpening") {
+                        Color.clear.frame(width: 1, height: 1)
+                            .accessibilityElement()
+                            .accessibilityIdentifier("salio-opening")
+                            .allowsHitTesting(false)
+                    }
+                    #endif
                 }
             }
         }
@@ -186,8 +195,11 @@ struct StubPlaceSearcher: PlaceSearching {
 
     var results: [LivePlace]
     var error: (any Error)?
+    /// How long a search takes, so tests can hold the launch screen on a slow first load.
+    var delay: TimeInterval = 0
 
     func search(_ request: PlaceRequest) async throws -> [LivePlace] {
+        if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
         if let error { throw error }
         return results
     }
@@ -289,7 +301,10 @@ final class SearchModel {
             return StubPlaceSearcher(results: [], error: URLError(.badURL))
         }
         if arguments.contains("-SALIOStubSearch") {
-            return StubPlaceSearcher(results: StubPlaceSearcher.fixedPlaces, error: nil)
+            // `-SALIOStubSearchDelay <seconds>` slows the stub down.
+            let delay = arguments.firstIndex(of: "-SALIOStubSearchDelay")
+                .flatMap { arguments.indices.contains($0 + 1) ? Double(arguments[$0 + 1]) : nil } ?? 0
+            return StubPlaceSearcher(results: StubPlaceSearcher.fixedPlaces, error: nil, delay: delay)
         }
         return MapKitPlaceSearcher()
     }
@@ -1215,7 +1230,18 @@ private struct FeedView: View {
         let searchCount = search.searchCount
         locating = true
         defer { locating = false }
-        center = await currentLocation()
+        // A location that never arrives (an unanswered prompt, no fix) counts as none after
+        // `locationTimeout`, so neither the opening nor the feed's loader waits forever.
+        center = await withTaskGroup(of: CLLocationCoordinate2D?.self) { group in
+            group.addTask { await currentLocation() }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(Self.locationTimeout))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
         guard !Task.isCancelled else { return }
         didLocate = true
         guard let center, search.searchCount == searchCount, !initial || searchCount == 0 else { return }
@@ -1225,9 +1251,15 @@ private struct FeedView: View {
         await search.loadNearby(near: center, matching: interests)
     }
 
+    private static let locationTimeout: TimeInterval = 12
+
     private func currentLocation() async -> CLLocationCoordinate2D? {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-SALIOStubLocationNever") {
+            try? await Task.sleep(for: .seconds(3600))
+            return nil
+        }
         if arguments.contains("-SALIOStubLocation") {
             return StubPlaceSearcher.fixedPlaces[0].coordinate
         }

@@ -273,6 +273,43 @@ final class SalioUITests: XCTestCase {
         XCTAssertEqual(searchCount(in: app), 1)
     }
 
+    func testOpeningHoldsThroughASlowFirstLoadAndOpensWhenItLands() {
+        // The stub takes 12s, past the old 2s cap and two 5s variations.
+        let app = launch(arguments: ["-SALIOStubSearch", "-SALIOStubLocation", "-SALIOShowSearchCount",
+                                     "-SALIOStubSearchDelay", "12", "-SALIOShowOpening"])
+        let opening = app.otherElements["salio-opening"]
+        XCTAssertTrue(opening.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 7)
+        XCTAssertTrue(opening.exists)
+        XCTAssertFalse(app.buttons["stub-cafe"].exists)
+
+        XCTAssertTrue(app.buttons["stub-cafe"].waitForExistence(timeout: 15))
+        XCTAssertTrue(opening.waitForNonExistence(timeout: 2))
+        XCTAssertEqual(searchCount(in: app), 1)
+    }
+
+    func testTappingTheOpeningReleasesItDuringASlowFirstLoad() {
+        let app = launch(arguments: ["-SALIOStubSearch", "-SALIOStubLocation",
+                                     "-SALIOStubSearchDelay", "60", "-SALIOShowOpening"])
+        let opening = app.otherElements["salio-opening"]
+        XCTAssertTrue(opening.waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(opening.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(searchField(in: app).exists)
+        XCTAssertFalse(app.buttons["stub-cafe"].exists)
+    }
+
+    func testOpeningReleasesWhenLocationNeverArrives() {
+        let app = launch(arguments: ["-SALIOStubSearch", "-SALIOStubLocationNever", "-SALIOShowOpening"])
+        let opening = app.otherElements["salio-opening"]
+        XCTAssertTrue(opening.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 6)
+        XCTAssertTrue(opening.exists)
+        // After the 12s location timeout it bursts and fades onto the no-location feed.
+        XCTAssertTrue(opening.waitForNonExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["turn-on-location"].waitForExistence(timeout: 5))
+    }
+
     private func launch(arguments: [String]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += arguments

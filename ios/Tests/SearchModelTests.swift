@@ -88,4 +88,26 @@ final class SearchModelTests: XCTestCase {
         XCTAssertEqual(model.searchCount, 1)
         XCTAssertEqual(model.status, .failed)
     }
+
+    func testOpeningVariesEveryFiveSecondsAndMorphsWithoutJumping() {
+        XCTAssertEqual(SalioOpening.variation(after: 0).epoch, 0)
+        XCTAssertEqual(SalioOpening.variation(after: 4.99).epoch, 0)
+        XCTAssertEqual(SalioOpening.variation(after: 4.99).morph, 1)
+        // A new variation starts fully at the old one and morphs in over 0.8s.
+        XCTAssertEqual(SalioOpening.variation(after: 5).epoch, 1)
+        XCTAssertEqual(SalioOpening.variation(after: 5).morph, 0, accuracy: 1e-9)
+        XCTAssertEqual(SalioOpening.variation(after: 5.4).morph, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(SalioOpening.variation(after: 6).morph, 1)
+        XCTAssertEqual(SalioOpening.variation(after: 12.6).epoch, 2)
+
+        for seed in [UInt64(0), 1, 42, .max] {
+            for count in [3, 5] {
+                for epoch in 1...12 {
+                    XCTAssertNotEqual(SalioOpening.pick(epoch, of: count, seed: seed),
+                                      SalioOpening.pick(epoch - 1, of: count, seed: seed))
+                    XCTAssertTrue((0..<count).contains(SalioOpening.pick(epoch, of: count, seed: seed)))
+                }
+            }
+        }
+    }
 }
