@@ -1104,35 +1104,41 @@ private struct FeedView: View {
         }
     }
 
+    @ViewBuilder
     private var railMap: some View {
-        Map(position: $railCamera) {
-            if let live = selectedLive {
-                ForEach(Array(search.results.enumerated()), id: \.element.id) { index, place in
-                    let isSelected = place.id == live.id
-                    Annotation(place.name, coordinate: place.coordinate) {
-                        Button {
-                            selection = .live(place.id)
-                        } label: {
-                            mapPin(number: index + 1, selected: isSelected, size: isSelected ? 30 : 24)
-                                .contentShape(Rectangle())
+        // Compact width never shows this column unless the Duo's book layout is up, so don't make MapKit load and draw a map offscreen.
+        if horizontalSizeClass == .compact, foldOffset == nil {
+            Color.clear
+        } else {
+            Map(position: $railCamera) {
+                if let live = selectedLive {
+                    ForEach(Array(search.results.enumerated()), id: \.element.id) { index, place in
+                        let isSelected = place.id == live.id
+                        Annotation(place.name, coordinate: place.coordinate) {
+                            Button {
+                                selection = .live(place.id)
+                            } label: {
+                                mapPin(number: index + 1, selected: isSelected, size: isSelected ? 30 : 24)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(place.name)
+                            .accessibilityIdentifier("rail-pin-\(place.id)")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(place.name)
-                        .accessibilityIdentifier("rail-pin-\(place.id)")
+                        .annotationTitles(.hidden)
+                    }
+                } else if let sample = selectedSample {
+                    Annotation(sample.name, coordinate: sample.coordinate) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white, palette.signal)
+                            .accessibilityHidden(true)
                     }
                     .annotationTitles(.hidden)
                 }
-            } else if let sample = selectedSample {
-                Annotation(sample.name, coordinate: sample.coordinate) {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.white, palette.signal)
-                        .accessibilityHidden(true)
-                }
-                .annotationTitles(.hidden)
             }
+            .mapStyle(.standard(pointsOfInterest: .excludingAll))
         }
-        .mapStyle(.standard(pointsOfInterest: .excludingAll))
     }
 
     /// The same numbered marker as the feed row, lifted off the map, with a 44pt hit area.
