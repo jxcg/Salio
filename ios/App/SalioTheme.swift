@@ -707,6 +707,115 @@ struct AsciiRoute: View {
     }
 }
 
+/// Lets someone draw on an ASCII grid. A finger leaves a trail of the opening's characters that thins
+/// from `@` to `.` as it fades, a glass ring with the opening's colour split rides under the finger,
+/// and letting go sends that ring outward. Nothing happens under Reduce Motion, VoiceOver or Increase
+/// Contrast, and nothing redraws once the trail has faded.
+struct AsciiTouchTrail: ViewModifier {
+    let palette: SalioPalette
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
+    /// Recent finger positions, oldest first.
+    @State private var trail: [(point: CGPoint, time: Date)] = []
+    @State private var finger: CGPoint?
+    /// Where and when the finger lifted, so the ring can spread out from there.
+    @State private var release: (point: CGPoint, time: Date)?
+    @State private var touches = 0
+
+    private static let cell: CGFloat = 14
+    /// How long a trail character lasts, and how long the released ring takes to spread out.
+    private static let life: TimeInterval = 0.7, spread: TimeInterval = 0.55
+
+    func body(content: Content) -> some View {
+        let enabled = !reduceMotion && !voiceOver && contrast != .increased
+        TimelineView(.animation(paused: finger == nil && trail.isEmpty && release == nil)) { timeline in
+            let now = timeline.date
+            let lens = lens(at: now)
+            content
+                .overlay { Canvas { context, size in draw(in: context, size: size, now: now) } }
+                // Opaque, so the shader can split colours across the characters' edges.
+                .background(Color("LaunchBackground"))
+                .visualEffect { view, _ in
+                    view.layerEffect(
+                        ShaderLibrary.frostedRefraction(
+                            .float2(lens.origin), .float(lens.radius), .float(40),
+                            .float(lens.strength), .float(1.4), .float(2.2)
+                        ),
+                        maxSampleOffset: CGSize(width: 20, height: 20),
+                        isEnabled: lens.strength > 0
+                    )
+                }
+        }
+        .contentShape(.rect)
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { drag in
+                    if finger == nil { touches += 1 }
+                    finger = drag.location
+                    release = nil
+                    // A new character only once the finger has moved most of a cell.
+                    if trail.last.map({ hypot($0.point.x - drag.location.x, $0.point.y - drag.location.y) > Self.cell * 0.6 }) ?? true {
+                        trail.append((drag.location, .now))
+                        trail.removeFirst(max(trail.count - 48, 0))
+                    }
+                }
+                .onEnded { drag in
+                    finger = nil
+                    release = (drag.location, .now)
+                },
+            isEnabled: enabled
+        )
+        .sensoryFeedback(.impact(weight: .light), trigger: touches)
+        // Lets the timeline pause again once everything has faded.
+        .task(id: finger == nil ? release?.time : nil) {
+            guard finger == nil, !trail.isEmpty || release != nil else { return }
+            try? await Task.sleep(for: .seconds(max(Self.life, Self.spread)))
+            trail = []
+            release = nil
+        }
+    }
+
+    /// The glass ring: a small breathing ring under the finger, or one spreading out from where it lifted.
+    private func lens(at now: Date) -> (origin: CGPoint, radius: Double, strength: Double) {
+        if let finger {
+            return (finger, 22 + 6 * sin(now.timeIntervalSinceReferenceDate * 7), 0.7)
+        }
+        guard let release else { return (.zero, 0, 0) }
+        let progress = min(now.timeIntervalSince(release.time) / Self.spread, 1)
+        return (release.point, 22 + (1 - pow(1 - progress, 2)) * 220, (1 - progress) * 0.85)
+    }
+
+    /// Stamps each trail point onto the grid cell under it, newest on top, thinning with age.
+    private func draw(in context: GraphicsContext, size: CGSize, now: Date) {
+        let cell = Self.cell
+        let columns = Int(size.width / cell), rows = Int(size.height / cell)
+        let inset = CGPoint(x: (size.width - CGFloat(columns) * cell) / 2, y: (size.height - CGFloat(rows) * cell) / 2)
+        let ramp = AsciiReveal.ramp.count
+        var seen = Set<Int>(), clear = Path(), front = Path(), tail = Path()
+        for (point, time) in trail.reversed() {
+            let age = now.timeIntervalSince(time) / Self.life
+            guard age < 1 else { break }
+            let col = Int((point.x - inset.x) / cell), row = Int((point.y - inset.y) / cell)
+            guard (0..<columns).contains(col), (0..<rows).contains(row), seen.insert(row * columns + col).inserted else { continue }
+            let x = inset.x + CGFloat(col) * cell, y = inset.y + CGFloat(row) * cell
+            clear.addRect(CGRect(x: x, y: y, width: cell, height: cell))
+            let level = min(Int(age * Double(ramp)), ramp - 1)
+            let at = CGAffineTransform(translationX: x + cell / 2, y: y + cell / 2)
+            if level < 3 {
+                front.addPath(AsciiReveal.glyphs[level], transform: at)
+            } else {
+                tail.addPath(AsciiReveal.glyphs[level], transform: at)
+            }
+        }
+        // Each character covers the grid dot under it instead of sitting on top of it.
+        context.fill(clear, with: .color(Color("LaunchBackground")))
+        context.fill(tail, with: .color(palette.muted))
+        context.fill(front, with: .color(palette.signal))
+    }
+}
+
 /// Stitching down the fold of the open Duo, like the binding of a book.
 struct BookSpine: View {
     let palette: SalioPalette

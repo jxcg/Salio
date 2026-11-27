@@ -15,6 +15,19 @@ struct OnboardingView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var large: Bool { dynamicTypeSize.isAccessibilitySize }
+    /// Kind rows stack the name under its controls a step before accessibility sizes, as soon as
+    /// names start to wrap beside them.
+    private var stacked: Bool { dynamicTypeSize >= .xxxLarge }
+    @ScaledMetric(relativeTo: .headline) private var markerSize = 28.0
+    /// Scrolled text fades out over at least one line of itself, so a line never straddles the edge.
+    @ScaledMetric(relativeTo: .body) private var scaledFade = 32.0
+    private var fade: CGFloat { min(scaledFade, 64) }
+    /// The scroll area's height and the current screen's words, so the grid can fill what's left.
+    @State private var viewport: CGFloat = 0
+    @State private var wordsHeight: CGFloat = 0
+    /// Whether there's content scrolled past the top or bottom edge; only then does that edge fade.
+    @State private var hidden: (above: Bool, below: Bool) = (false, false)
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @State private var step = 0
     @State private var kinds: Set<String> = []
@@ -27,6 +40,7 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
             // ASCII step marker, such as `● ○ ○`. The newest step fills in through `· : +` first.
             Text((0..<3).map { $0 < step ? "●" : $0 == step ? filling.map(String.init) ?? "●" : "○" }.joined(separator: " "))
                 .font(.system(.footnote, design: .monospaced))
@@ -34,8 +48,6 @@ struct OnboardingView: View {
                 .accessibilityLabel("Step \(step + 1) of 3")
                 // Decorative, and VoiceOver reads the label, so it stops growing at large text sizes.
                 .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-                .padding(.top, 24)
-                .padding(.horizontal, 24)
                 .task(id: step) {
                     guard step > 0, !reduceMotion else { return }
                     for character in "·:+" {
@@ -44,6 +56,19 @@ struct OnboardingView: View {
                     }
                     filling = nil
                 }
+                Spacer(minLength: 16)
+                // At accessibility sizes the way out sits up here, so only the main button is pinned
+                // below and the choices keep most of the screen.
+                if large {
+                    skip
+                        .fixedSize()
+                        // Secondary, so it never competes with the title.
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                }
+            }
+            .padding(.top, 24)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -62,13 +87,19 @@ struct OnboardingView: View {
             .id(step)
             .transition(Self.stepChange)
             .scrollBounceBehavior(.basedOnSize)
-            // Scrolled content fades out at both edges instead of being cut off. The fades sit
-            // inside the content's own padding, so nothing is faded until it scrolls.
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport = $0 }
+            .onScrollGeometryChange(for: [Bool].self) { geometry in
+                let top = geometry.contentOffset.y + geometry.contentInsets.top
+                return [top > 1, top + geometry.containerSize.height < geometry.contentSize.height - 1]
+            } action: { _, edges in
+                hidden = (edges[0], edges[1])
+            }
+            // Scrolled content fades out at both edges instead of being cut off.
             .mask {
                 VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 28)
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: hidden.above ? fade : 0)
                     Color.black
-                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 28)
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: hidden.below ? fade : 0)
                 }
             }
 
@@ -103,15 +134,24 @@ struct OnboardingView: View {
 
     private var kindPicker: some View {
         VStack(alignment: .leading, spacing: 20) {
-            heading("What are you looking for?", "Nearby only shows these. Choose as many as you like, or skip to see everything.")
+            heading(
+                "What are you looking for?",
+                // Shorter at accessibility sizes, so the first choices show without scrolling.
+                large ? "Nearby only shows these. Choose any." : "Nearby only shows these. Choose as many as you like, or skip to see everything."
+            )
             // An atlas index, like the feed: every kind is a numbered row in one card.
             VStack(spacing: 0) {
                 ForEach(Array(Preferences.kinds.enumerated()), id: \.element.name) { index, kind in
+                    // Two-line rows at accessibility sizes need a rule between them to read as separate.
+                    if stacked, index > 0 {
+                        Rectangle().fill(palette.border).frame(height: 1).padding(.horizontal, 14)
+                    }
                     kindRow(index + 1, kind.name, symbol: kind.symbol)
                 }
             }
-            .padding(.vertical, 4)
-            .background(palette.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(palette.card)
+            // Clipped, so the first and last rows' wash follows the card's corners.
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(palette.border, lineWidth: 1))
         }
     }
@@ -121,36 +161,52 @@ struct OnboardingView: View {
         return Button {
             if selected { kinds.remove(name) } else { kinds.insert(name) }
         } label: {
-            HStack(spacing: 12) {
-                IndexMarker(number: number, selected: selected, palette: palette)
-                Image(systemName: symbol)
-                    .foregroundStyle(selected ? palette.signal : palette.muted)
-                    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-                    // A small hop when it's chosen.
-                    .symbolEffect(.bounce, options: .speed(1.4), value: selected)
-                    // A fixed column, so every name starts at the same edge.
-                    .frame(width: 32)
-                Text(name)
-                    .font(.headline)
-                    .foregroundStyle(palette.ink)
-                    // Still very large, but keeps "Restaurants" whole on one line.
-                    .dynamicTypeSize(...DynamicTypeSize.accessibility2)
-                    .layoutPriority(1)
-                // Large names need the leader's room to wrap between words.
-                if dynamicTypeSize.isAccessibilitySize {
-                    Spacer(minLength: 0)
-                } else {
-                    DotLeader(color: palette.border)
+            // The marker and tick box grow with the text, so the row's state stays as easy to read as its name.
+            let marker = IndexMarker(number: number, selected: selected, palette: palette, size: min(markerSize, 40))
+            let icon = Image(systemName: symbol)
+                .foregroundStyle(selected ? palette.signal : palette.muted)
+                .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                // A small hop when it's chosen.
+                .symbolEffect(.bounce, options: .speed(1.4), value: selected)
+                // A fixed column, so every name starts at the same edge.
+                .frame(width: 32)
+            // An ASCII tick box, so choosing reads like filling in a list.
+            let tick = Text(selected ? "[×]" : "[ ]")
+                .font(.system(.headline, design: .monospaced).weight(.semibold))
+                .foregroundStyle(selected ? palette.signal : palette.muted)
+                .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                .fixedSize()
+            let title = Text(name)
+                .font(.headline)
+                .foregroundStyle(palette.ink)
+                .dynamicTypeSize(...DynamicTypeSize.accessibility3)
+            Group {
+            if stacked {
+                // Large names get the row's whole width on their own line, under the marker and tick,
+                // so they wrap between words and never crowd the controls.
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 12) {
+                        marker
+                        icon
+                        Spacer(minLength: 0)
+                        tick
+                    }
+                    title.frame(maxWidth: .infinity, alignment: .leading)
                 }
-                // An ASCII tick box, so choosing reads like filling in a list.
-                Text(selected ? "[×]" : "[ ]")
-                    .font(.system(.subheadline, design: .monospaced).weight(.semibold))
-                    .foregroundStyle(selected ? palette.signal : palette.muted)
-                    .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-                    .fixedSize()
+            } else {
+                HStack(spacing: 12) {
+                    marker
+                    icon
+                    title.layoutPriority(1)
+                    DotLeader(color: palette.border)
+                    tick
+                }
+            }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
+            // A faint wash marks chosen rows as a whole, not just by their tick box.
+            .background(selected ? palette.signal.opacity(0.08) : .clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle(scale: 0.98))
@@ -170,27 +226,37 @@ struct OnboardingView: View {
         }
     }
 
-    /// Fills the empty space below the words, so it's left out when large text needs that space.
+    /// Fills the room left under the words, and can be drawn on with a finger. When large text leaves too
+    /// little room for a real grid, it's left out, so the screen never scrolls because of it.
     @ViewBuilder
     private func art(_ content: some View) -> some View {
-        if !dynamicTypeSize.isAccessibilitySize {
+        // The scroll content's vertical padding, the stack's spacing, and the art's own top gap.
+        let room = viewport - 56 - 20 - 12 - wordsHeight
+        if room >= 96 {
             content
-                .frame(height: 252)
+                .frame(height: min(room, 340))
+                .modifier(AsciiTouchTrail(palette: palette))
                 .padding(.top, 12)
         }
     }
 
     private func heading(_ title: String, _ detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: large ? 6 : 10) {
             Text(title)
                 .font(.largeTitle.weight(.bold))
                 .foregroundStyle(palette.ink)
+                // At the largest sizes the title would take three lines for five words; capped (with the
+                // body), the words and the choices come into view sooner.
+                .dynamicTypeSize(...DynamicTypeSize.accessibility2)
                 .accessibilityAddTraits(.isHeader)
             Text(detail)
                 .font(.body)
                 .foregroundStyle(palette.muted)
+                // Capped with the title, so the title is never the smaller of the two.
+                .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         }
         .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { wordsHeight = $0 }
     }
 
     private var actions: some View {
@@ -198,22 +264,27 @@ struct OnboardingView: View {
             switch step {
             case 0:
                 primary("Get started", id: "onboarding-start") { step = 1 }
-                secondary("Skip for now", id: "onboarding-skip") { onFinish(false) }
             case 1:
                 primary(kinds.isEmpty ? "Show me everything" : "Continue", id: "onboarding-continue") {
                     save()
                     step = 2
                 }
-                secondary("Skip for now", id: "onboarding-skip") { step = 2 }
             default:
                 primary("Use my location", id: "onboarding-allow-location") { onFinish(true) }
-                secondary("Not now", id: "onboarding-skip") { onFinish(false) }
             }
+            if !large { skip }
         }
         // Keeps the buttons from crowding out the choices at the largest text sizes,
         // and leaves a gap so scrolled content never runs into them.
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .padding(.top, 12)
+    }
+
+    /// The way past this step without choosing.
+    private var skip: some View {
+        secondary(step == 2 ? "Not now" : "Skip for now", id: "onboarding-skip") {
+            if step == 1 { step = 2 } else { onFinish(false) }
+        }
     }
 
     private func primary(_ title: String, id: String, action: @escaping () -> Void) -> some View {
