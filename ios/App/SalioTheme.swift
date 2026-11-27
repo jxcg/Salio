@@ -517,6 +517,97 @@ struct AsciiLoader: View {
     }
 }
 
+/// A `@` that sends a ring of the opening's ASCII characters out around it, like sonar, lighting up
+/// the `+` places it passes. It sits in empty space, never behind text, and holds still under Reduce
+/// Motion, VoiceOver and Increase Contrast.
+struct AsciiRadar: View {
+    let palette: SalioPalette
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private static let cell: CGFloat = 14
+    /// Each ring takes `sweep` seconds to leave the frame, then the radar rests before the next.
+    private static let sweep: TimeInterval = 2.2, rest: TimeInterval = 0.8
+    /// The ring's depth in cells, and how long a place stays lit after the ring passes it.
+    private static let band = 3.0, glow: TimeInterval = 0.9
+    /// Indexes into `AsciiReveal.ramp`: `@#*+=-:.`.
+    private static let you = 0, lit = 2, place = 3
+
+    var body: some View {
+        let animates = !reduceMotion && !voiceOver && contrast != .increased
+        // 30 fps is plenty: the ring moves a whole cell at a time.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animates)) { timeline in
+            let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.sweep + Self.rest)
+            Canvas { context, size in draw(in: context, size: size, phase: animates ? phase : nil) }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// Draws one frame; `phase` is the time into the current sweep, or nil for the still frame.
+    private func draw(in context: GraphicsContext, size: CGSize, phase: TimeInterval?) {
+        let cell = Self.cell
+        let columns = Int(size.width / cell), rows = Int(size.height / cell)
+        guard columns > 2, rows > 2 else { return }
+        let inset = CGPoint(x: (size.width - CGFloat(columns) * cell) / 2, y: (size.height - CGFloat(rows) * cell) / 2)
+        let centre = (row: rows / 2, col: columns / 2)
+        // The ring eases out from the centre until it has left the farthest corner.
+        let reach = hypot(Double(columns), Double(rows)) / 2 + Self.band
+        func ring(at time: TimeInterval) -> Double { (1 - pow(1 - min(time / Self.sweep, 1), 2)) * reach }
+        let radius = phase.map { $0 < Self.sweep ? ring(at: $0) : -1 } ?? -1
+
+        var dots = Path(), trail = Path(), front = Path(), places = Path(), signal = Path()
+        for row in 0..<rows {
+            for col in 0..<columns {
+                let at = CGAffineTransform(
+                    translationX: inset.x + (CGFloat(col) + 0.5) * cell,
+                    y: inset.y + (CGFloat(row) + 0.5) * cell
+                )
+                if row == centre.row, col == centre.col {
+                    signal.addPath(AsciiReveal.glyphs[Self.you], transform: at)
+                    continue
+                }
+                let distance = hypot(Double(col - centre.col), Double(row - centre.row))
+                let hash = AsciiReveal.hash(row: row, col: col)
+
+                // About one cell in twenty is a place, never right next to you.
+                if hash % 20 == 0, distance > 2.5 {
+                    // When the ring reached this place, worked back from how far it is.
+                    let passed = Self.sweep * (1 - (1 - min(distance / reach, 1)).squareRoot())
+                    if let phase, phase >= passed, phase - passed < Self.glow {
+                        signal.addPath(AsciiReveal.glyphs[Self.lit], transform: at)
+                    } else {
+                        places.addPath(AsciiReveal.glyphs[Self.place], transform: at)
+                    }
+                    continue
+                }
+
+                // Inside the ring the characters thin out from `*` at its edge to `.` behind it.
+                let behind = radius - distance
+                if behind >= 0, behind < Self.band, Double((hash >> 8) % 100) / 100 > behind / Self.band * 0.7 {
+                    let level = min(2 + Int(behind / Self.band * 6), AsciiReveal.ramp.count - 1)
+                    if level < 4 {
+                        front.addPath(AsciiReveal.glyphs[level], transform: at)
+                    } else {
+                        trail.addPath(AsciiReveal.glyphs[level], transform: at)
+                    }
+                } else {
+                    let point = CGPoint(x: at.tx, y: at.ty)
+                    dots.addEllipse(in: CGRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2))
+                }
+            }
+        }
+        context.fill(dots, with: .color(palette.border))
+        context.fill(trail, with: .color(palette.muted.opacity(0.6)))
+        context.fill(front, with: .color(palette.muted))
+        // Places take a faint accent, so they never read as part of the ring's grey `+`.
+        context.fill(places, with: .color(palette.signal.opacity(0.5)))
+        context.fill(signal, with: .color(palette.signal))
+    }
+}
+
 /// Stitching down the fold of the open Duo, like the binding of a book.
 struct BookSpine: View {
     let palette: SalioPalette

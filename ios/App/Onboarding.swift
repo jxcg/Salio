@@ -18,6 +18,8 @@ struct OnboardingView: View {
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
     @State private var step = 0
     @State private var kinds: Set<String> = []
+    /// The character the newest step dot is filling in through, or nil once it's full.
+    @State private var filling: Character?
 
     private var palette: SalioPalette {
         appearance.palette(for: colorScheme)
@@ -25,8 +27,8 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // ASCII step marker, such as `● ○ ○`.
-            Text((0..<3).map { $0 <= step ? "●" : "○" }.joined(separator: " "))
+            // ASCII step marker, such as `● ○ ○`. The newest step fills in through `· : +` first.
+            Text((0..<3).map { $0 < step ? "●" : $0 == step ? filling.map(String.init) ?? "●" : "○" }.joined(separator: " "))
                 .font(.system(.footnote, design: .monospaced))
                 .foregroundStyle(palette.signal)
                 .accessibilityLabel("Step \(step + 1) of 3")
@@ -34,6 +36,14 @@ struct OnboardingView: View {
                 .dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .padding(.top, 24)
                 .padding(.horizontal, 24)
+                .task(id: step) {
+                    guard step > 0, !reduceMotion else { return }
+                    for character in "·:+" {
+                        filling = character
+                        try? await Task.sleep(for: .milliseconds(70))
+                    }
+                    filling = nil
+                }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -82,10 +92,13 @@ struct OnboardingView: View {
     )
 
     private var welcome: some View {
-        heading(
-            "Somewhere worth going, nearby.",
-            "Salio shows places within walking distance that suit what you’re after. Everything stays on this device."
-        )
+        VStack(alignment: .leading, spacing: 20) {
+            heading(
+                "Somewhere worth going, nearby.",
+                "Salio shows places within walking distance that suit what you’re after. Everything stays on this device."
+            )
+            radar
+        }
     }
 
     private var kindPicker: some View {
@@ -142,10 +155,23 @@ struct OnboardingView: View {
     }
 
     private var location: some View {
-        heading(
-            "Find what’s around you",
-            "Salio uses your location to find places within walking distance. It stays on this device and is never sent anywhere."
-        )
+        VStack(alignment: .leading, spacing: 20) {
+            heading(
+                "Find what’s around you",
+                "Salio uses your location to find places within walking distance. It stays on this device and is never sent anywhere."
+            )
+            radar
+        }
+    }
+
+    /// Fills the empty space below the words, so it's left out when large text needs that space.
+    @ViewBuilder
+    private var radar: some View {
+        if !dynamicTypeSize.isAccessibilitySize {
+            AsciiRadar(palette: palette)
+                .frame(height: 252)
+                .padding(.top, 12)
+        }
     }
 
     private func heading(_ title: String, _ detail: String) -> some View {
