@@ -522,12 +522,17 @@ struct AsciiLoader: View {
 /// Motion, VoiceOver and Increase Contrast.
 struct AsciiRadar: View {
     let palette: SalioPalette
+    /// Whether rings go out. Off once someone draws on the grid, so their trail has it to itself.
+    var pulses = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorSchemeContrast) private var contrast
+    /// When the first ring left, a moment after the grid appears, so the opening and the words land first.
+    @State private var start: Date?
 
     private static let cell: CGFloat = 14
+    private static let delay: Duration = .seconds(2.5)
     /// Each ring takes `sweep` seconds to leave the frame, then the radar rests before the next.
     private static let sweep: TimeInterval = 2.2, rest: TimeInterval = 0.8
     /// The ring's depth in cells, and how long a place stays lit after the ring passes it.
@@ -536,11 +541,15 @@ struct AsciiRadar: View {
     private static let you = 0, lit = 2, place = 3
 
     var body: some View {
-        let animates = !reduceMotion && !voiceOver && contrast != .increased
+        let animates = pulses && start != nil && !reduceMotion && !voiceOver && contrast != .increased
         // 30 fps is plenty: the ring moves a whole cell at a time.
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animates)) { timeline in
-            let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.sweep + Self.rest)
+            let phase = start.map { timeline.date.timeIntervalSince($0).truncatingRemainder(dividingBy: Self.sweep + Self.rest) }
             Canvas { context, size in draw(in: context, size: size, phase: animates ? phase : nil) }
+        }
+        .task {
+            try? await Task.sleep(for: Self.delay)
+            start = .now
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -713,6 +722,8 @@ struct AsciiRoute: View {
 /// Contrast, and nothing redraws once the trail has faded.
 struct AsciiTouchTrail: ViewModifier {
     let palette: SalioPalette
+    /// Called when a finger first lands on the grid.
+    var onTouch: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -752,7 +763,10 @@ struct AsciiTouchTrail: ViewModifier {
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { drag in
-                    if finger == nil { touches += 1 }
+                    if finger == nil {
+                        touches += 1
+                        onTouch()
+                    }
                     finger = drag.location
                     release = nil
                     // A new character only once the finger has moved most of a cell.
