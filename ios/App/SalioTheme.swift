@@ -365,12 +365,15 @@ struct FrostedGlassCard<Content: View>: View {
 struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
     let palette: SalioPalette
     let trigger: Trigger
+    /// Whether the reveal also plays when the map first appears, not only when `trigger` changes.
+    let revealsOnAppear: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorSchemeContrast) private var contrast
     @State private var revealStart: Date?
     @State private var isRevealing = false
+    @State private var appeared = false
 
     private let duration: TimeInterval = 0.85
 
@@ -401,7 +404,9 @@ struct MapBlurRevealModifier<Trigger: Equatable>: ViewModifier {
                 }
         }
         .task(id: trigger) {
-            guard allowsReveal else {
+            let firstRun = !appeared
+            appeared = true
+            guard allowsReveal, revealsOnAppear || !firstRun else {
                 isRevealing = false
                 revealStart = nil
                 return
@@ -458,9 +463,10 @@ private struct AsciiVeil: View, Equatable {
 extension View {
     func mapBlurReveal<Trigger: Equatable>(
         palette: SalioPalette,
-        trigger: Trigger
+        trigger: Trigger,
+        revealsOnAppear: Bool = true
     ) -> some View {
-        modifier(MapBlurRevealModifier(palette: palette, trigger: trigger))
+        modifier(MapBlurRevealModifier(palette: palette, trigger: trigger, revealsOnAppear: revealsOnAppear))
     }
 }
 

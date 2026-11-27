@@ -977,7 +977,8 @@ private struct FeedView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 railMap
-                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey)
+                    // Already showing when the opening tears onto it, so it only reveals a new selection.
+                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey, revealsOnAppear: false)
                     .frame(height: foldOffset == nil ? 180 : 240)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay(
