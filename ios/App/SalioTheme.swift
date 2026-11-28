@@ -649,12 +649,20 @@ struct AsciiRadar: View {
 /// behind text, and shows one finished route, still, under Reduce Motion, VoiceOver and Increase Contrast.
 struct AsciiRoute: View {
     let palette: SalioPalette
+    /// Whether a finger is on the grid. A walk already under way reaches its place; no new one starts
+    /// until a moment after the finger lifts.
+    var holding = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorSchemeContrast) private var contrast
+    /// When the current run of walks began, or nil while the route rests on its last lit place.
+    @State private var start: Date? = .now
+    /// Which place the next run begins with, so walks carry on round the places after a rest.
+    @State private var first = 0
 
     private static let cell: CGFloat = 14
+    private static let resume: TimeInterval = 1.5
     /// Each walk takes `walk` seconds, then the lit place holds for `hold` before the next walk.
     private static let walk: TimeInterval = 1.6, hold: TimeInterval = 0.8
     /// Where the places sit, as fractions of the grid away from you.
@@ -664,10 +672,29 @@ struct AsciiRoute: View {
 
     var body: some View {
         let animates = !reduceMotion && !voiceOver && contrast != .increased
+        let leg = Self.walk + Self.hold
         // 30 fps is plenty: the walker moves a whole cell at a time.
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animates)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animates || start == nil)) { timeline in
+            // Time into the current run, counted from the place it began with; at rest, the end of the
+            // last walk, so its place stays lit.
+            let time = start.map { timeline.date.timeIntervalSince($0) + Double(first) * leg } ?? (Double(first + Self.stops.count) * leg - 0.01)
             Canvas { context, size in draw(in: context, size: size, time: animates ? time : nil) }
+        }
+        .task(id: holding) {
+            do {
+                // A walk already under way reaches its place, which stays lit while the route rests.
+                if holding, let start {
+                    let into = Date.now.timeIntervalSince(start)
+                    let walked = Int(into / leg) + 1
+                    try await Task.sleep(for: .seconds(Double(walked) * leg - into - Self.hold))
+                    first = (first + walked) % Self.stops.count
+                    self.start = nil
+                    return
+                }
+                guard start == nil else { return }
+                try await Task.sleep(for: .seconds(Self.resume))
+                start = .now
+            } catch {}
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)

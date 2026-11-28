@@ -225,7 +225,7 @@ struct OnboardingView: View {
                 "Find what’s around you",
                 "Salio uses your location to find places within walking distance. It stays on this device and is never sent anywhere."
             )
-            art(AsciiRoute(palette: palette))
+            art(AsciiRoute(palette: palette, holding: drawing))
         }
     }
 
