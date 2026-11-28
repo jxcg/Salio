@@ -51,8 +51,8 @@ struct AsciiReveal: View {
     var opens = true
 
     private static let cell: CGFloat = 14
-    /// Densest first: the front is `@`, and the trail behind it thins out to `.`.
-    private static let ramp = Array("@#*+=-:.")
+    /// Densest first: the front is `@`, and the trail behind it thins out to `.`. Shared with `AsciiRadar`.
+    static let ramp = Array("@#*+=-:.")
     /// The front's depth, as a fraction of the diagonal: the sheet tears open 35% of the way in, and
     /// the trail of characters runs on over the uncovered content for the rest.
     private static let depth = 0.22, tear = 0.35
@@ -140,7 +140,7 @@ struct AsciiReveal: View {
     }
 
     /// A stable pseudo-random number per cell (SplitMix64), so the ragged edge and trail never flicker.
-    private static func hash(row: Int, col: Int) -> UInt64 {
+    static func hash(row: Int, col: Int) -> UInt64 {
         var h = UInt64(bitPattern: Int64(row &* 73_856_093 ^ col &* 19_349_663))
         h ^= h >> 30
         h &*= 0xBF58_476D_1CE4_E5B9
@@ -157,7 +157,7 @@ struct AsciiReveal: View {
 
     /// The ramp as outlines centred on the origin, made once, so a frame fills one path per colour instead
     /// of typesetting each character.
-    private static let glyphs: [Path] = {
+    static let glyphs: [Path] = {
         let font = PlatformFont.monospacedSystemFont(ofSize: 13, weight: .bold) as CTFont
         let middle = (CTFontGetAscent(font) - CTFontGetDescent(font)) / 2
         return ramp.map { character in

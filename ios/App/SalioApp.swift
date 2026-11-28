@@ -13,16 +13,44 @@ struct SalioApp: App {
     @State private var showsOpening = true
     @State private var feedReady = false
     @State private var feedFound = false
+    /// Bumped to play the opening again, such as when onboarding hands over to the feed.
+    @State private var openingRun = 0
+    @AppStorage(OnboardingView.finishedKey) private var finishedOnboarding = false
+    /// False after someone skips the location step, so the feed waits for them to ask instead.
+    @State private var requestsLocation = true
 
     var body: some Scene {
         WindowGroup {
-            FeedView(profileContainer: profileContainer) { found in
+            FeedView(
+                profileContainer: profileContainer,
+                setUp: finishedOnboarding,
+                requestsLocation: requestsLocation
+            ) { found in
                 feedFound = found
                 feedReady = true
             }
             .overlay {
+                if !finishedOnboarding {
+                    OnboardingView(container: try? profileContainer.get()) { allowsLocation in
+                        requestsLocation = allowsLocation
+                        if allowsLocation {
+                            // Burst open onto the feed once it has loaded with the new choices.
+                            feedReady = false
+                            feedFound = false
+                            openingRun += 1
+                            showsOpening = true
+                            finishedOnboarding = true
+                        } else {
+                            withAnimation(.easeOut(duration: 0.25)) { finishedOnboarding = true }
+                        }
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .overlay {
                 if showsOpening {
                     SalioOpening(ready: feedReady, found: feedFound) { showsOpening = false }
+                        .id(openingRun)
                 }
             }
         }
@@ -117,7 +145,8 @@ extension MKPointOfInterestCategory {
 }
 
 enum PlaceRequest: Sendable {
-    case nearby(CLLocationCoordinate2D)
+    /// Places within walking distance of the centre, of these categories only, or of every kind when empty.
+    case nearby(CLLocationCoordinate2D, categories: [MKPointOfInterestCategory])
     case text(String, near: CLLocationCoordinate2D?)
 }
 
@@ -127,18 +156,14 @@ protocol PlaceSearching: Sendable {
 
 struct MapKitPlaceSearcher: PlaceSearching {
     private static let nearbyRadiusMeters: CLLocationDistance = 1_000
-    private static let nearbyCategories: [MKPointOfInterestCategory] = [
-        .cafe, .bakery, .restaurant, .brewery, .nightlife, .foodMarket,
-        .museum, .movieTheater, .theater, .musicVenue, .landmark,
-        .park, .beach, .zoo, .aquarium, .amusementPark,
-    ]
 
     func search(_ request: PlaceRequest) async throws -> [LivePlace] {
         let search: MKLocalSearch
         switch request {
-        case .nearby(let center):
+        case .nearby(let center, let categories):
             let request = MKLocalPointsOfInterestRequest(center: center, radius: Self.nearbyRadiusMeters)
-            request.pointOfInterestFilter = MKPointOfInterestFilter(including: Self.nearbyCategories)
+            let wanted = categories.isEmpty ? Preferences.categories(for: Preferences.kindNames) : categories
+            request.pointOfInterestFilter = MKPointOfInterestFilter(including: wanted)
             search = MKLocalSearch(request: request)
         case .text(let query, let center):
             let request = MKLocalSearch.Request()
@@ -182,6 +207,8 @@ struct StubPlaceSearcher: PlaceSearching {
                   latitude: 51.5128, longitude: -0.1300),
         LivePlace(id: "stub-cinema", name: "Stub Cinema", address: "2 Stub Street", category: .movieTheater,
                   latitude: 51.5160, longitude: -0.1238),
+        LivePlace(id: "stub-restaurant", name: "Stub Kitchen", address: "3 Stub Street", category: .restaurant,
+                  latitude: 51.5175, longitude: -0.1200),
     ]
 
     var results: [LivePlace]
@@ -189,7 +216,8 @@ struct StubPlaceSearcher: PlaceSearching {
 
     func search(_ request: PlaceRequest) async throws -> [LivePlace] {
         if let error { throw error }
-        return results
+        guard case .nearby(_, let categories) = request, !categories.isEmpty else { return results }
+        return results.filter { $0.category.map(categories.contains) ?? false }
     }
 }
 
@@ -211,8 +239,6 @@ final class SearchModel {
     private(set) var searchCount = 0
 
     private let searcher: any PlaceSearching
-    private var rawNearbyResults: [LivePlace] = []
-    private var nearbyCenter: CLLocationCoordinate2D?
 
     init(searcher: any PlaceSearching) {
         self.searcher = searcher
@@ -221,63 +247,33 @@ final class SearchModel {
     func submit(near center: CLLocationCoordinate2D? = nil) async {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        await load(.text(text, near: center), nearby: false, interests: [])
+        await load(.text(text, near: center))
     }
 
-    func loadNearby(near center: CLLocationCoordinate2D, matching interests: [String]) async {
-        nearbyCenter = center
-        await load(.nearby(center), nearby: true, interests: interests)
+    /// Only the chosen kinds of place, or every kind when `kinds` is empty, nearest first.
+    func loadNearby(near center: CLLocationCoordinate2D, kinds: [String]) async {
+        await load(.nearby(center, categories: Preferences.categories(for: kinds)))
     }
 
-    func reprioritize(for interests: [String]) {
-        guard isNearbyResults else { return }
-        results = Self.prioritized(rawNearbyResults, for: interests, near: nearbyCenter)
-    }
-
-    func matchReason(for place: LivePlace, interests: [String]) -> String? {
-        guard isNearbyResults,
-              let interest = Preferences.matchingInterest(for: place.category, in: interests) else { return nil }
-        return "Matches \(interest)"
-    }
-
-    private func load(_ request: PlaceRequest, nearby: Bool, interests: [String]) async {
+    private func load(_ request: PlaceRequest) async {
         guard status != .searching else { return }
         searchCount += 1
         status = .searching
         do {
             let places = try await searcher.search(request)
-            isNearbyResults = nearby
-            rawNearbyResults = nearby ? places : []
-            results = nearby ? Self.prioritized(places, for: interests, near: nearbyCenter) : places
+            if case .nearby(let center, _) = request {
+                isNearbyResults = true
+                results = places.sorted { $0.distance(from: center) < $1.distance(from: center) }
+            } else {
+                isNearbyResults = false
+                results = places
+            }
             status = results.isEmpty ? .empty : .results
         } catch {
             isNearbyResults = false
-            rawNearbyResults = []
             results = []
             status = .failed
         }
-    }
-
-    /// Interest matches first, and each group nearest first.
-    private static func prioritized(
-        _ places: [LivePlace],
-        for interests: [String],
-        near center: CLLocationCoordinate2D?
-    ) -> [LivePlace] {
-        let ordered = center.map { center in
-            places.sorted { $0.distance(from: center) < $1.distance(from: center) }
-        } ?? places
-        guard !interests.isEmpty else { return ordered }
-        var matches: [LivePlace] = []
-        var others: [LivePlace] = []
-        for place in ordered {
-            if Preferences.matchingInterest(for: place.category, in: interests) != nil {
-                matches.append(place)
-            } else {
-                others.append(place)
-            }
-        }
-        return matches + others
     }
 
     static func liveSearcher() -> any PlaceSearching {
@@ -381,12 +377,11 @@ private enum Selection: Hashable {
 }
 
 private struct FeedView: View {
-    private enum ProfileSheet: String, Identifiable {
-        case onboarding, profile
-        var id: String { rawValue }
-    }
-
     let profileContainer: Result<ModelContainer, any Error>
+    /// False while onboarding covers the feed, so nothing loads or asks for location underneath it.
+    var setUp = true
+    /// Whether Nearby may ask iOS for location as soon as the feed is set up.
+    var requestsLocation = true
     /// Called once the first Nearby load has finished, with whether it found places. It is also called
     /// when the load failed, found nothing, or had no location.
     var onFirstLoad: (_ found: Bool) -> Void = { _ in }
@@ -401,9 +396,11 @@ private struct FeedView: View {
     @State private var selection: Selection?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var search = SearchModel(searcher: SearchModel.liveSearcher())
-    @State private var profileSheet: ProfileSheet?
-    @AppStorage(SalioTestStore.scopedKey("finishedInterestSetup")) private var finishedInterestSetup = false
-    @State private var activeInterests: [String] = []
+    @State private var showsProfile = false
+    /// The kinds of place saved in Profile; empty means every kind.
+    @State private var savedKinds: [String] = []
+    /// Kinds chosen on the feed for this session only, or nil to follow `savedKinds`.
+    @State private var sessionKinds: [String]?
     @State private var center: CLLocationCoordinate2D?
     @State private var locating = false
     @State private var didLocate = false
@@ -420,6 +417,10 @@ private struct FeedView: View {
 
     private var palette: SalioPalette {
         appearance.palette(for: colorScheme)
+    }
+
+    private var activeKinds: [String] {
+        sessionKinds ?? savedKinds
     }
 
     private var railMapRevealKey: String {
@@ -506,29 +507,33 @@ private struct FeedView: View {
         }
         .background { foldReader }
         .tint(palette.signal)
-        .sheet(item: $profileSheet) { sheet in
+        .sheet(isPresented: $showsProfile) {
             switch profileContainer {
             case .success(let container):
                 ProfileView(
-                    interestsOnly: sheet == .onboarding,
-                    onSave: { interests in
-                        finishedInterestSetup = true
-                        activeInterests = interests
-                        search.reprioritize(for: interests)
+                    onSave: { kinds in
+                        savedKinds = kinds
+                        sessionKinds = nil
+                        Task { await reloadNearby() }
                     },
                     onReset: {
-                        finishedInterestSetup = false
-                        activeInterests = []
-                        search.reprioritize(for: [])
-                    }
+                        savedKinds = []
+                        sessionKinds = nil
+                    },
+                    onSetUpAgain: { showsProfile = false }
                 )
                 .modelContainer(container)
             case .failure: ContentUnavailableView("Profile unavailable", systemImage: "person.crop.circle")
             }
         }
-        .task {
+        .task(id: setUp) {
+            // While onboarding covers the feed, let the opening fade onto it straight away.
+            guard setUp else { return onFirstLoad(false) }
+            savedKinds = Preferences.kinds(from: (try? profileContainer.get().mainContext
+                .fetch(FetchDescriptor<Preferences>()).first?.interests) ?? [])
+            sessionKinds = nil
             syncRailCamera()
-            await locate(initial: true)
+            if requestsLocation { await locate(initial: !didLocate) }
             onFirstLoad(search.status == .results)
         }
         .onChange(of: search.results) {
@@ -580,7 +585,7 @@ private struct FeedView: View {
                     }
                     .accessibilityIdentifier(showMap ? "show-list" : "show-map")
                 }
-                Button("Profile", systemImage: "person.crop.circle") { profileSheet = .profile }
+                Button("Profile", systemImage: "person.crop.circle") { showsProfile = true }
             }
         }
     }
@@ -633,49 +638,11 @@ private struct FeedView: View {
                         .accessibilityIdentifier("search-count")
                 }
 
-                searchSections
-
-                if !finishedInterestSetup, case .success = profileContainer {
-                    FrostedGlassCard(
-                        palette: palette,
-                        seedKey: "onboarding",
-                        salt: 4219,
-                        tapToRipple: true
-                    ) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("Make it yours")
-                                    .font(.headline.weight(.bold))
-                                    .foregroundStyle(palette.ink)
-                                Text("Choose what you like to see matching places first.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(palette.muted)
-                            }
-                            HStack(spacing: 8) {
-                                Button("Choose interests") {
-                                    profileSheet = .onboarding
-                                }
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(palette.onCTA)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(palette.ink, in: Capsule())
-                                .buttonStyle(.plain)
-
-                                Button("Skip for now") {
-                                    finishedInterestSetup = true
-                                }
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(palette.ink)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(palette.soft, in: Capsule())
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                if center != nil {
+                    kindFilter
                 }
+
+                searchSections
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Sample places")
@@ -757,6 +724,16 @@ private struct FeedView: View {
                         Text("Search places or turn on location to see what’s nearby.")
                             .font(.subheadline)
                             .foregroundStyle(palette.muted)
+                        if !requestsLocation, !didLocate {
+                            Button("Use my location") { Task { await locate(initial: true) } }
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(palette.onCTA)
+                                .padding(.horizontal, 16)
+                                .frame(minHeight: 44)
+                                .background(palette.ink, in: Capsule())
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("use-location")
+                        }
                         // By now Salio has already asked for location, so only Settings can turn it on.
                         if didLocate, center == nil, let settings = URL(string: UIApplication.openSettingsURLString) {
                             Button("Turn on location") { openURL(settings) }
@@ -813,9 +790,25 @@ private struct FeedView: View {
             }
         case .empty:
             statusCard {
-                Text("No matches. Try a different search.")
-                    .font(.subheadline)
-                    .foregroundStyle(palette.muted)
+                if search.isNearbyResults, !activeKinds.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Nothing like that within walking distance.")
+                            .font(.subheadline)
+                            .foregroundStyle(palette.muted)
+                        Button("Show everything") { showKinds([]) }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(palette.onCTA)
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 44)
+                            .background(palette.ink, in: Capsule())
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("show-everything")
+                    }
+                } else {
+                    Text("No matches. Try a different search.")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.muted)
+                }
             }
         case .failed:
             statusCard {
@@ -922,7 +915,6 @@ private struct FeedView: View {
 
     /// A marker, then the name joined by dots to its distance, like an atlas index entry.
     private func livePlaceContent(_ place: LivePlace, featured: Bool) -> some View {
-        let reason = search.matchReason(for: place, interests: activeInterests)
         let summary = place.summary
         return HStack(alignment: .firstTextBaseline, spacing: 12) {
             IndexMarker(number: indexNumber(of: place), selected: selection == .live(place.id), palette: palette)
@@ -942,26 +934,11 @@ private struct FeedView: View {
                         Spacer(minLength: 0)
                     }
                 }
-                if !summary.isEmpty || reason != nil {
-                    HStack(spacing: 4) {
-                        if !summary.isEmpty {
-                            Text(summary)
-                                .foregroundStyle(palette.muted)
-                                .lineLimit(1)
-                        }
-                        if let reason {
-                            if !summary.isEmpty {
-                                Text("·")
-                                    .foregroundStyle(palette.muted)
-                                    .accessibilityHidden(true)
-                            }
-                            Text(reason)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(palette.signal)
-                                .layoutPriority(1)
-                        }
-                    }
-                    .font(.subheadline)
+                if !summary.isEmpty {
+                    Text(summary)
+                        .font(.subheadline)
+                        .foregroundStyle(palette.muted)
+                        .lineLimit(1)
                 }
             }
         }
@@ -1033,11 +1010,6 @@ private struct FeedView: View {
                                 tapToRipple: true
                             ) {
                                 VStack(alignment: .leading, spacing: 10) {
-                                    if let reason = search.matchReason(for: live, interests: activeInterests) {
-                                        Text(reason)
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(palette.signal)
-                                    }
                                     Text(live.name)
                                         .font(.headline)
                                         .foregroundStyle(palette.ink)
@@ -1220,9 +1192,49 @@ private struct FeedView: View {
         didLocate = true
         guard let center, search.searchCount == searchCount, !initial || searchCount == 0 else { return }
         if !initial { search.query = "" }
-        let interests = (try? profileContainer.get().mainContext.fetch(FetchDescriptor<Preferences>()).first?.interests) ?? []
-        activeInterests = interests
-        await search.loadNearby(near: center, matching: interests)
+        await search.loadNearby(near: center, kinds: activeKinds)
+    }
+
+    /// Loads Nearby again with the active kinds, clearing any text search.
+    private func reloadNearby() async {
+        guard let center else { return }
+        search.query = ""
+        await search.loadNearby(near: center, kinds: activeKinds)
+    }
+
+    /// Shows these kinds for this session only; the saved choice in Profile stays as it is.
+    private func showKinds(_ kinds: [String]) {
+        sessionKinds = kinds == savedKinds ? nil : kinds
+        Task { await reloadNearby() }
+    }
+
+    /// Chips that narrow Nearby for this session, with a way back to the saved choice.
+    private var kindFilter: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                if sessionKinds != nil {
+                    KindChip(title: "Reset", symbol: "arrow.uturn.backward", selected: false, palette: palette) {
+                        showKinds(savedKinds)
+                    }
+                    .accessibilityIdentifier("kind-reset")
+                }
+                KindChip(title: "Everything", symbol: nil, selected: activeKinds.isEmpty, palette: palette) {
+                    showKinds([])
+                }
+                .accessibilityIdentifier("kind-everything")
+                ForEach(Preferences.kinds, id: \.name) { kind in
+                    let selected = activeKinds.contains(kind.name)
+                    KindChip(title: kind.name, symbol: kind.symbol, selected: selected, palette: palette) {
+                        let next = selected ? activeKinds.filter { $0 != kind.name } : activeKinds + [kind.name]
+                        showKinds(Preferences.kindNames.filter(next.contains))
+                    }
+                    .accessibilityIdentifier("kind-\(kind.name)")
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .scrollIndicators(.hidden)
+        .disabled(search.status == .searching || locating)
     }
 
     private func currentLocation() async -> CLLocationCoordinate2D? {

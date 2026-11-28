@@ -42,85 +42,112 @@ final class SalioUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["North Street Gallery"].exists)
     }
 
-    func testInterestSetupIsOptionalAndSkipPersists() {
+    func testSkippingOnboardingShowsEverythingWithoutAskingForLocationAndStaysSkipped() {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["-SALIOStubSearch"]
-        app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = UUID().uuidString
+        let app = storedApp(arguments: ["-SALIOStubSearch", "-SALIOStubLocation"], onboarded: false)
         app.launch()
 
-        let skip = app.buttons["Skip for now"]
-        XCTAssertTrue(skip.waitForExistence(timeout: 5))
-        XCTAssertTrue(searchField(in: app).isHittable)
+        let skip = app.buttons["onboarding-skip"]
+        XCTAssertTrue(app.buttons["onboarding-start"].waitForExistence(timeout: 5))
         skip.tap()
-        XCTAssertTrue(app.buttons["Choose interests"].waitForNonExistence(timeout: 2))
+        XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["use-location"].exists)
+        XCTAssertFalse(app.buttons["stub-cafe"].exists)
+        app.buttons["use-location"].tap()
+        XCTAssertTrue(app.buttons["stub-cafe"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["stub-restaurant"].exists)
 
         app.terminate()
         app.launch()
-        XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["Choose interests"].exists)
+        XCTAssertTrue(app.buttons["stub-cafe"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["onboarding-start"].exists)
+
+        app.buttons["Profile"].tap()
+        app.swipeUp()
+        app.buttons["profile-set-up-again"].tap()
+        XCTAssertTrue(app.buttons["onboarding-start"].waitForExistence(timeout: 5))
+    }
+
+    func testOnboardingChoiceFiltersNearbyAndShowsInProfile() {
+        continueAfterFailure = false
+        let app = storedApp(arguments: ["-SALIOStubSearch", "-SALIOStubLocation"], onboarded: false)
+        app.launch()
+
+        let start = app.buttons["onboarding-start"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        start.tap()
+        app.buttons["onboarding-kind-Restaurants"].tap()
+        XCTAssertTrue(app.buttons["onboarding-kind-Restaurants"].isSelected)
+        app.buttons["onboarding-continue"].tap()
+        app.buttons["onboarding-allow-location"].tap()
+
+        let restaurant = app.buttons["stub-restaurant"]
+        XCTAssertTrue(restaurant.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["stub-cafe"].exists)
+        XCTAssertFalse(app.buttons["stub-cinema"].exists)
+        XCTAssertTrue(app.buttons["kind-Restaurants"].isSelected)
+
+        app.buttons["Profile"].tap()
+        XCTAssertTrue(app.switches["Restaurants"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.switches["Restaurants"].value as? String, "1")
+        XCTAssertEqual(app.switches["Film"].value as? String, "0")
+        app.buttons["Cancel"].tap()
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(restaurant.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["stub-cafe"].exists)
+        XCTAssertFalse(start.exists)
+    }
+
+    func testFeedFilterLastsForTheSessionOnly() {
+        continueAfterFailure = false
+        let app = storedApp(arguments: ["-SALIOStubSearch", "-SALIOStubLocation", "-SALIOShowSearchCount"])
+        app.launch()
+
+        let cafe = app.buttons["stub-cafe"]
+        let cinema = app.buttons["stub-cinema"]
+        XCTAssertTrue(cafe.waitForExistence(timeout: 10))
+        XCTAssertTrue(cinema.exists)
+        XCTAssertTrue(app.buttons["kind-everything"].isSelected)
+        XCTAssertFalse(app.buttons["kind-reset"].exists)
+
+        app.buttons["kind-Film"].tap()
+        XCTAssertTrue(cafe.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(cinema.exists)
+        XCTAssertEqual(searchCount(in: app), 2)
+        XCTAssertTrue(app.buttons["kind-reset"].exists)
+
+        app.buttons["kind-Film"].tap()
+        app.buttons["kind-Bars and nightlife"].tap()
+        XCTAssertTrue(app.buttons["show-everything"].waitForExistence(timeout: 5))
+        app.buttons["show-everything"].tap()
+        XCTAssertTrue(cafe.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["kind-reset"].exists)
+
+        app.buttons["kind-Film"].tap()
+        XCTAssertTrue(cafe.waitForNonExistence(timeout: 5))
         app.buttons["Profile"].tap()
         XCTAssertTrue(app.switches["Film"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.switches["Film"].value as? String, "0")
-    }
-
-    func testInterestSetupUpdatesNearbyOrderImmediatelyWithoutRefetching() {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["-SALIOStubSearch", "-SALIOStubLocation", "-SALIOShowSearchCount"]
-        app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = UUID().uuidString
-        app.launch()
-
-        let choose = app.buttons["Choose interests"]
-        let cinema = app.buttons["stub-cinema"]
-        let cafe = app.buttons["stub-cafe"]
-        XCTAssertTrue(cinema.waitForExistence(timeout: 10))
-        XCTAssertLessThan(cafe.frame.midY, cinema.frame.midY)
-        XCTAssertEqual(searchCount(in: app), 1)
-        XCTAssertFalse(app.staticTexts["Matches Film"].exists)
-        choose.tap()
-        let film = app.switches["Film"]
-        XCTAssertTrue(film.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["profile-budget"].exists)
-        XCTAssertFalse(app.switches["Walking"].exists)
-        tapToggle(film)
-        app.buttons["Save"].tap()
-        XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 5))
-        XCTAssertTrue(choose.waitForNonExistence(timeout: 2))
-
-        XCTAssertTrue(app.staticTexts["Matches Film"].waitForExistence(timeout: 5))
-        XCTAssertLessThan(cinema.frame.midY, cafe.frame.midY)
-        XCTAssertEqual(searchCount(in: app), 1)
-
-        searchField(in: app).tap()
-        searchField(in: app).typeText("coffee\n")
-        XCTAssertTrue(app.staticTexts["Searches: 2"].waitForExistence(timeout: 10))
-        XCTAssertLessThan(cafe.frame.midY, cinema.frame.midY)
-        XCTAssertFalse(app.staticTexts["Matches Film"].exists)
+        app.buttons["Cancel"].tap()
 
         app.terminate()
         app.launch()
-        XCTAssertTrue(cinema.waitForExistence(timeout: 10))
-        XCTAssertFalse(choose.exists)
-        XCTAssertTrue(app.staticTexts["Matches Film"].exists)
-        XCTAssertLessThan(cinema.frame.midY, cafe.frame.midY)
+        XCTAssertTrue(cafe.waitForExistence(timeout: 10))
+        XCTAssertTrue(cinema.exists)
+        XCTAssertFalse(app.buttons["kind-reset"].exists)
     }
 
     func testProfileSavesAndResetsAcrossAppRelaunches() {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments += ["-SALIOStubSearch", "-SALIOStubLocation", "-SALIOShowSearchCount"]
-        app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = UUID().uuidString
+        let app = storedApp(arguments: ["-SALIOStubSearch", "-SALIOStubLocation", "-SALIOShowSearchCount"])
         app.launch()
 
         let profile = app.buttons["Profile"]
         let cinema = app.buttons["stub-cinema"]
         let cafe = app.buttons["stub-cafe"]
         XCTAssertTrue(cafe.waitForExistence(timeout: 10))
-        guard profile.waitForExistence(timeout: 5) else {
-            XCTFail("Profile is not available from Nearby")
-            return
-        }
         profile.tap()
         let film = app.switches["Film"]
         let walking = app.switches["Walking"]
@@ -140,17 +167,15 @@ final class SalioUITests: XCTestCase {
         tapToggle(walking)
         tapToggle(transit)
         app.buttons["Save"].tap()
-        XCTAssertTrue(app.textFields["search-field"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Matches Film"].waitForExistence(timeout: 5))
-        XCTAssertLessThan(cinema.frame.midY, cafe.frame.midY)
-        XCTAssertEqual(searchCount(in: app), 1)
+        XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(cafe.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(cinema.exists)
+        XCTAssertEqual(searchCount(in: app), 2)
 
         app.terminate()
         app.launch()
         XCTAssertTrue(cinema.waitForExistence(timeout: 10))
-        XCTAssertTrue(cafe.exists)
-        XCTAssertTrue(app.staticTexts["Matches Film"].exists)
-        XCTAssertLessThan(cinema.frame.midY, cafe.frame.midY)
+        XCTAssertFalse(cafe.exists)
         profile.tap()
         XCTAssertEqual(film.value as? String, "1")
         XCTAssertEqual(budget.value as? String, "££")
@@ -163,18 +188,12 @@ final class SalioUITests: XCTestCase {
         app.buttons["Reset preferences"].tap()
         app.alerts.buttons["Reset"].tap()
         app.buttons["Cancel"].tap()
-        XCTAssertTrue(app.staticTexts["Matches Film"].waitForNonExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["Choose interests"].waitForExistence(timeout: 2))
-        XCTAssertLessThan(cafe.frame.midY, cinema.frame.midY)
-        XCTAssertEqual(searchCount(in: app), 1)
 
         app.terminate()
         app.launch()
         XCTAssertTrue(cafe.waitForExistence(timeout: 10))
         XCTAssertTrue(cinema.exists)
-        XCTAssertTrue(app.buttons["Choose interests"].exists)
-        XCTAssertFalse(app.staticTexts["Matches Film"].exists)
-        XCTAssertLessThan(cafe.frame.midY, cinema.frame.midY)
+        XCTAssertFalse(app.buttons["onboarding-start"].exists)
         profile.tap()
         XCTAssertEqual(film.value as? String, "0")
         XCTAssertEqual(budget.value as? String, "Not set")
@@ -186,9 +205,7 @@ final class SalioUITests: XCTestCase {
 
     func testThemeChoicePersistsAcrossRelaunches() {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["-SALIOStubSearch", "-SALIOStubLocation"]
-        app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = UUID().uuidString
+        let app = storedApp(arguments: ["-SALIOStubSearch", "-SALIOStubLocation"])
         app.launch()
 
         let profile = app.buttons["Profile"]
@@ -275,8 +292,17 @@ final class SalioUITests: XCTestCase {
 
     private func launch(arguments: [String]) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments += arguments
+        app.launchArguments += arguments + ["-finishedOnboarding", "YES"]
         app.launch()
+        return app
+    }
+
+    /// An app with its own profile store, so saved choices start empty; onboarded unless asked not to be.
+    private func storedApp(arguments: [String], onboarded: Bool = true) -> XCUIApplication {
+        let store = UUID().uuidString
+        let app = XCUIApplication()
+        app.launchArguments = arguments + (onboarded ? ["-finishedOnboarding.\(store)", "YES"] : [])
+        app.launchEnvironment["SALIO_PROFILE_TEST_STORE"] = store
         return app
     }
 

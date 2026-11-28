@@ -517,6 +517,360 @@ struct AsciiLoader: View {
     }
 }
 
+/// A `@` that sends a ring of the opening's ASCII characters out around it, like sonar, lighting up
+/// the `+` places it passes. It sits in empty space, never behind text, and holds still under Reduce
+/// Motion, VoiceOver and Increase Contrast.
+struct AsciiRadar: View {
+    let palette: SalioPalette
+    /// Whether a finger is on the grid. A ring already out finishes; no new one starts until a moment after it lifts.
+    var holding = false
+    /// Where the finger has drawn, in this view's coordinates. A passing ring bends round the finger and lights these.
+    var touches: [CGPoint] = []
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
+    /// When the current run of rings began, or nil while the radar rests: for a moment after the grid
+    /// appears, so the opening and the words land first, and while someone draws.
+    @State private var start: Date?
+    @State private var hasPulsed = false
+
+    private static let cell: CGFloat = 14
+    /// The wait before the first ring, and before rings come back once a finger lifts.
+    private static let delay: TimeInterval = 2.5, resume: TimeInterval = 1.5
+    /// Each ring takes `sweep` seconds to leave the frame, then the radar rests before the next.
+    private static let sweep: TimeInterval = 2.2, rest: TimeInterval = 0.8
+    /// The ring's depth in cells, and how long a place stays lit after the ring passes it.
+    private static let band = 3.0, glow: TimeInterval = 0.9
+    /// Indexes into `AsciiReveal.ramp`: `@#*+=-:.`.
+    private static let you = 0, lit = 2, place = 3
+
+    var body: some View {
+        let animates = start != nil && !reduceMotion && !voiceOver && contrast != .increased
+        // Only a ring in flight reads the trail; at rest the grid ignores it, so drawing doesn't redraw the grid.
+        let touches = animates ? touches : []
+        // 30 fps is plenty: the ring moves a whole cell at a time.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animates)) { timeline in
+            let phase = start.map { timeline.date.timeIntervalSince($0).truncatingRemainder(dividingBy: Self.sweep + Self.rest) }
+            Canvas { context, size in draw(in: context, size: size, phase: animates ? phase : nil, touches: touches) }
+        }
+        .task(id: holding) {
+            do {
+                // A ring already out finishes, with its lit places, before the radar rests.
+                if let start {
+                    let period = Self.sweep + Self.rest
+                    let into = Date.now.timeIntervalSince(start).truncatingRemainder(dividingBy: period)
+                    try await Task.sleep(for: .seconds(period - into))
+                    self.start = nil
+                }
+                guard !holding else { return }
+                try await Task.sleep(for: .seconds(hasPulsed ? Self.resume : Self.delay))
+                start = .now
+                hasPulsed = true
+            } catch {}
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// Draws one frame; `phase` is the time into the current sweep, or nil for the still frame.
+    private func draw(in context: GraphicsContext, size: CGSize, phase: TimeInterval?, touches: [CGPoint]) {
+        let cell = Self.cell
+        let columns = Int(size.width / cell), rows = Int(size.height / cell)
+        guard columns > 2, rows > 2 else { return }
+        let inset = CGPoint(x: (size.width - CGFloat(columns) * cell) / 2, y: (size.height - CGFloat(rows) * cell) / 2)
+        let centre = (row: rows / 2, col: columns / 2)
+        // The ring eases out from the centre until it has left the farthest corner.
+        let reach = hypot(Double(columns), Double(rows)) / 2 + Self.band
+        func ring(at time: TimeInterval) -> Double { (1 - pow(1 - min(time / Self.sweep, 1), 2)) * reach }
+        let radius = phase.map { $0 < Self.sweep ? ring(at: $0) : -1 } ?? -1
+        // The cells the finger drew on, and the latest point, which the ring bulges out around.
+        func cellOf(_ point: CGPoint) -> (row: Int, col: Int) {
+            (Int((point.y - inset.y) / cell), Int((point.x - inset.x) / cell))
+        }
+        let drawn = Set(touches.map { cellOf($0) }.map { $0.row * columns + $0.col })
+        let finger = touches.last.map(cellOf)
+
+        var dots = Path(), trail = Path(), front = Path(), places = Path(), signal = Path()
+        for row in 0..<rows {
+            for col in 0..<columns {
+                let at = CGAffineTransform(
+                    translationX: inset.x + (CGFloat(col) + 0.5) * cell,
+                    y: inset.y + (CGFloat(row) + 0.5) * cell
+                )
+                if row == centre.row, col == centre.col {
+                    signal.addPath(AsciiReveal.glyphs[Self.you], transform: at)
+                    continue
+                }
+                let distance = hypot(Double(col - centre.col), Double(row - centre.row))
+                let hash = AsciiReveal.hash(row: row, col: col)
+
+                // About one cell in twenty is a place, never right next to you.
+                if hash % 20 == 0, distance > 2.5 {
+                    // When the ring reached this place, worked back from how far it is.
+                    let passed = Self.sweep * (1 - (1 - min(distance / reach, 1)).squareRoot())
+                    if let phase, phase >= passed, phase - passed < Self.glow {
+                        signal.addPath(AsciiReveal.glyphs[Self.lit], transform: at)
+                    } else {
+                        places.addPath(AsciiReveal.glyphs[Self.place], transform: at)
+                    }
+                    continue
+                }
+
+                // Near the finger the ring arrives early, so it bulges out round it like water round a stone.
+                let bend = finger.map { 2.5 * exp(-(pow(Double(col - $0.col), 2) + pow(Double(row - $0.row), 2)) / 6) } ?? 0
+                // Inside the ring the characters thin out from `*` at its edge to `.` behind it.
+                let behind = radius - distance + bend
+                if behind >= 0, behind < Self.band, drawn.contains(row * columns + col) {
+                    // The ring lights the trail it crosses.
+                    signal.addPath(AsciiReveal.glyphs[1], transform: at)
+                } else if behind >= 0, behind < Self.band, Double((hash >> 8) % 100) / 100 > behind / Self.band * 0.7 {
+                    let level = min(2 + Int(behind / Self.band * 6), AsciiReveal.ramp.count - 1)
+                    if level < 4 {
+                        front.addPath(AsciiReveal.glyphs[level], transform: at)
+                    } else {
+                        trail.addPath(AsciiReveal.glyphs[level], transform: at)
+                    }
+                } else {
+                    let point = CGPoint(x: at.tx, y: at.ty)
+                    dots.addEllipse(in: CGRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2))
+                }
+            }
+        }
+        context.fill(dots, with: .color(palette.border))
+        context.fill(trail, with: .color(palette.muted.opacity(0.6)))
+        context.fill(front, with: .color(palette.muted))
+        // Places take a faint accent, so they never read as part of the ring's grey `+`.
+        context.fill(places, with: .color(palette.signal.opacity(0.5)))
+        context.fill(signal, with: .color(palette.signal))
+    }
+}
+
+/// A `#` that walks city blocks from `@` (you) to one nearby place after another, leaving a `: .`
+/// trail, and lights each place from `+` to `*` when it gets there. It sits in empty space, never
+/// behind text, and shows one finished route, still, under Reduce Motion, VoiceOver and Increase Contrast.
+struct AsciiRoute: View {
+    let palette: SalioPalette
+    /// Whether a finger is on the grid. A walk already under way reaches its place; no new one starts
+    /// until a moment after the finger lifts.
+    var holding = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
+    /// When the current run of walks began, or nil while the route rests on its last lit place.
+    @State private var start: Date? = .now
+    /// Which place the next run begins with, so walks carry on round the places after a rest.
+    @State private var first = 0
+
+    private static let cell: CGFloat = 14
+    private static let resume: TimeInterval = 1.5
+    /// Each walk takes `walk` seconds, then the lit place holds for `hold` before the next walk.
+    private static let walk: TimeInterval = 1.6, hold: TimeInterval = 0.8
+    /// Where the places sit, as fractions of the grid away from you.
+    private static let stops: [(x: Double, y: Double)] = [(0.36, -0.32), (-0.34, 0.3), (0.28, 0.36)]
+    /// Indexes into `AsciiReveal.ramp`: `@#*+=-:.`.
+    private static let you = 0, walker = 1, lit = 2, place = 3, near = 6, far = 7
+
+    var body: some View {
+        let animates = !reduceMotion && !voiceOver && contrast != .increased
+        let leg = Self.walk + Self.hold
+        // 30 fps is plenty: the walker moves a whole cell at a time.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animates || start == nil)) { timeline in
+            // Time into the current run, counted from the place it began with; at rest, the end of the
+            // last walk, so its place stays lit.
+            let time = start.map { timeline.date.timeIntervalSince($0) + Double(first) * leg } ?? (Double(first + Self.stops.count) * leg - 0.01)
+            Canvas { context, size in draw(in: context, size: size, time: animates ? time : nil) }
+        }
+        .task(id: holding) {
+            do {
+                // A walk already under way reaches its place, which stays lit while the route rests.
+                if holding, let start {
+                    let into = Date.now.timeIntervalSince(start)
+                    let walked = Int(into / leg) + 1
+                    try await Task.sleep(for: .seconds(Double(walked) * leg - into - Self.hold))
+                    first = (first + walked) % Self.stops.count
+                    self.start = nil
+                    return
+                }
+                guard start == nil else { return }
+                try await Task.sleep(for: .seconds(Self.resume))
+                start = .now
+            } catch {}
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// Draws one frame; `time` is the clock, or nil for the still frame.
+    private func draw(in context: GraphicsContext, size: CGSize, time: TimeInterval?) {
+        let cell = Self.cell
+        let columns = Int(size.width / cell), rows = Int(size.height / cell)
+        guard columns > 4, rows > 4 else { return }
+        let inset = CGPoint(x: (size.width - CGFloat(columns) * cell) / 2, y: (size.height - CGFloat(rows) * cell) / 2)
+        let start = (row: rows / 2, col: columns / 2)
+        let places = Self.stops.map { stop in
+            (row: min(max(start.row + Int(stop.y * Double(rows)), 0), rows - 1),
+             col: min(max(start.col + Int(stop.x * Double(columns)), 0), columns - 1))
+        }
+
+        // Which place this walk heads for, and how far into the walk it is.
+        let leg = Self.walk + Self.hold
+        let elapsed = time.map { $0.truncatingRemainder(dividingBy: leg * Double(places.count)) } ?? leg - 0.01
+        let target = Int(elapsed / leg)
+        let into = elapsed - Double(target) * leg
+
+        // Along the row first, then down the column, like walking round a block.
+        let goal = places[target]
+        var route = [Int]()
+        var col = start.col, row = start.row
+        while col != goal.col { col += goal.col > col ? 1 : -1; route.append(row * columns + col) }
+        while row != goal.row { row += goal.row > row ? 1 : -1; route.append(row * columns + col) }
+        let steps = min(Int(into / Self.walk * Double(route.count)), route.count)
+        let arrived = steps == route.count
+
+        // What each marked cell shows; everything else is a faint dot.
+        var marks = [Int: (glyph: Int, signal: Bool)]()
+        for (index, cell) in route.prefix(steps).enumerated() {
+            let behind = steps - 1 - index
+            marks[cell] = behind == 0 && !arrived ? (Self.walker, true) : (behind < 4 ? Self.near : Self.far, false)
+        }
+        marks[start.row * columns + start.col] = (Self.you, true)
+
+        var dots = Path(), trail = Path(), signal = Path(), waiting = Path()
+        for place in places {
+            let index = place.row * columns + place.col
+            if index == route.last, arrived {
+                marks[index] = (Self.lit, true)
+            } else {
+                marks[index] = nil
+                waiting.addPath(AsciiReveal.glyphs[Self.place], transform: transform(place.row, place.col, inset))
+            }
+        }
+        for row in 0..<rows {
+            for col in 0..<columns {
+                let at = transform(row, col, inset)
+                if let mark = marks[row * columns + col] {
+                    if mark.signal {
+                        signal.addPath(AsciiReveal.glyphs[mark.glyph], transform: at)
+                    } else {
+                        trail.addPath(AsciiReveal.glyphs[mark.glyph], transform: at)
+                    }
+                } else if !places.contains(where: { $0.row == row && $0.col == col }) {
+                    dots.addEllipse(in: CGRect(x: at.tx - 1, y: at.ty - 1, width: 2, height: 2))
+                }
+            }
+        }
+        context.fill(dots, with: .color(palette.border))
+        context.fill(trail, with: .color(palette.muted))
+        context.fill(waiting, with: .color(palette.signal.opacity(0.5)))
+        context.fill(signal, with: .color(palette.signal))
+    }
+
+    private func transform(_ row: Int, _ col: Int, _ inset: CGPoint) -> CGAffineTransform {
+        CGAffineTransform(translationX: inset.x + (CGFloat(col) + 0.5) * Self.cell, y: inset.y + (CGFloat(row) + 0.5) * Self.cell)
+    }
+}
+
+/// Lets someone draw on an ASCII grid. A finger leaves a trail of the opening's characters that thins
+/// from `@` to `.` as it fades, with a faint red and blue split on the newest characters, like the
+/// opening's glass. Only the trail redraws, at 30 fps, and only until it has faded. Nothing happens
+/// under Reduce Motion, VoiceOver or Increase Contrast.
+struct AsciiTouchTrail: ViewModifier {
+    let palette: SalioPalette
+    /// Called as the finger lands, moves and lifts, with whether it's down and the points it has drawn.
+    var onChange: (_ touching: Bool, _ points: [CGPoint]) -> Void = { _, _ in }
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.colorSchemeContrast) private var contrast
+    /// Recent finger positions, oldest first.
+    @State private var trail: [(point: CGPoint, time: Date)] = []
+    @State private var touching = false
+    @State private var touches = 0
+
+    private static let cell: CGFloat = 14
+    /// How long a trail character lasts.
+    private static let life: TimeInterval = 0.7
+
+    func body(content: Content) -> some View {
+        let enabled = !reduceMotion && !voiceOver && contrast != .increased
+        content
+            // Only the trail sits in the timeline, so the grid underneath doesn't redraw with it.
+            .overlay {
+                TimelineView(.animation(minimumInterval: 1.0 / 30, paused: trail.isEmpty)) { timeline in
+                    Canvas { context, size in draw(in: context, size: size, now: timeline.date) }
+                }
+                .allowsHitTesting(false)
+            }
+            .contentShape(.rect)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { drag in
+                        if !touching {
+                            touching = true
+                            touches += 1
+                            onChange(true, trail.map(\.point))
+                        }
+                        // A new character only once the finger has moved most of a cell.
+                        if trail.last.map({ hypot($0.point.x - drag.location.x, $0.point.y - drag.location.y) > Self.cell * 0.6 }) ?? true {
+                            trail.append((drag.location, .now))
+                            trail.removeFirst(max(trail.count - 48, 0))
+                            onChange(true, trail.map(\.point))
+                        }
+                    }
+                    .onEnded { _ in
+                        touching = false
+                        onChange(false, trail.map(\.point))
+                    },
+                isEnabled: enabled
+            )
+            .sensoryFeedback(.impact(weight: .light), trigger: touches)
+            // Clears the trail once it has faded, so the timeline pauses.
+            .task(id: touching ? nil : trail.last?.time) {
+                guard !touching, !trail.isEmpty else { return }
+                try? await Task.sleep(for: .seconds(Self.life))
+                trail = []
+                onChange(false, [])
+            }
+    }
+
+    /// Stamps each trail point onto the grid cell under it, newest on top, thinning with age.
+    private func draw(in context: GraphicsContext, size: CGSize, now: Date) {
+        let cell = Self.cell
+        let columns = Int(size.width / cell), rows = Int(size.height / cell)
+        let inset = CGPoint(x: (size.width - CGFloat(columns) * cell) / 2, y: (size.height - CGFloat(rows) * cell) / 2)
+        let ramp = AsciiReveal.ramp.count
+        var seen = Set<Int>(), clear = Path(), front = Path(), tail = Path()
+        for (point, time) in trail.reversed() {
+            let age = now.timeIntervalSince(time) / Self.life
+            guard age < 1 else { break }
+            let col = Int((point.x - inset.x) / cell), row = Int((point.y - inset.y) / cell)
+            guard (0..<columns).contains(col), (0..<rows).contains(row), seen.insert(row * columns + col).inserted else { continue }
+            let x = inset.x + CGFloat(col) * cell, y = inset.y + CGFloat(row) * cell
+            clear.addRect(CGRect(x: x, y: y, width: cell, height: cell))
+            let level = min(Int(age * Double(ramp)), ramp - 1)
+            let at = CGAffineTransform(translationX: x + cell / 2, y: y + cell / 2)
+            if level < 3 {
+                front.addPath(AsciiReveal.glyphs[level], transform: at)
+            } else {
+                tail.addPath(AsciiReveal.glyphs[level], transform: at)
+            }
+        }
+        // Each character covers the grid dot under it instead of sitting on top of it.
+        context.fill(clear, with: .color(Color("LaunchBackground")))
+        context.fill(tail, with: .color(palette.muted))
+        // A faint red and blue ghost either side of the newest characters stands in for the glass's
+        // colour split, without a shader pass over the grid.
+        var shifted = context
+        shifted.translateBy(x: -1.5, y: 0)
+        shifted.fill(front, with: .color(.red.opacity(0.35)))
+        shifted.translateBy(x: 3, y: 0)
+        shifted.fill(front, with: .color(.blue.opacity(0.35)))
+        context.fill(front, with: .color(palette.signal))
+    }
+}
+
 /// Stitching down the fold of the open Duo, like the binding of a book.
 struct BookSpine: View {
     let palette: SalioPalette

@@ -26,39 +26,45 @@ final class SearchModelTests: XCTestCase {
         XCTAssertTrue(model.results.isEmpty)
     }
 
-    func testNearbyPutsMatchesFirstNearestFirstReprioritizesLocallyAndLeavesTextSearchUntouched() async {
+    func testNearbyShowsOnlyChosenKindsNearestFirstAndTextSearchIsUnfiltered() async {
         let cafe = StubPlaceSearcher.fixedPlaces[0]
         let cinema = StubPlaceSearcher.fixedPlaces[1]
         let unknown = LivePlace(id: "unknown", name: "Unknown", address: "", category: nil,
                                 latitude: 51.518, longitude: -0.11)
-        let bakery = LivePlace(id: "bakery", name: "Bakery", address: "", category: .bakery,
-                               latitude: 51.520, longitude: -0.12)
-        let original = [cinema, bakery, unknown, cafe]
+        let far = LivePlace(id: "far", name: "Far Kitchen", address: "", category: .restaurant,
+                            latitude: 51.530, longitude: -0.13)
+        let near = LivePlace(id: "near", name: "Near Market", address: "", category: .foodMarket,
+                             latitude: 51.513, longitude: -0.13)
+        let original = [far, cinema, unknown, near, cafe]
         let model = SearchModel(searcher: StubPlaceSearcher(results: original))
 
-        await model.loadNearby(near: cafe.coordinate, matching: ["Food"])
-        XCTAssertEqual(model.results.map(\.id), ["stub-cafe", "bakery", "stub-cinema", "unknown"])
-        XCTAssertEqual(model.matchReason(for: bakery, interests: ["Food"]), "Matches Food")
-        XCTAssertNil(model.matchReason(for: cinema, interests: ["Food"]))
-        XCTAssertNil(model.matchReason(for: unknown, interests: ["Food"]))
-        XCTAssertEqual(model.searchCount, 1)
+        await model.loadNearby(near: cafe.coordinate, kinds: ["Restaurants"])
+        XCTAssertEqual(model.results.map(\.id), ["near", "far"])
+        XCTAssertTrue(model.isNearbyResults)
 
-        model.reprioritize(for: ["Film"])
-        XCTAssertEqual(model.results.map(\.id), ["stub-cinema", "stub-cafe", "bakery", "unknown"])
-        XCTAssertEqual(model.matchReason(for: cinema, interests: ["Film"]), "Matches Film")
-        XCTAssertNil(model.matchReason(for: bakery, interests: ["Film"]))
-        XCTAssertEqual(model.searchCount, 1)
+        await model.loadNearby(near: cafe.coordinate, kinds: ["Film", "Cafés and bakeries"])
+        XCTAssertEqual(model.results.map(\.id), ["stub-cafe", "stub-cinema"])
 
-        model.reprioritize(for: [])
-        XCTAssertEqual(model.results.map(\.id), ["stub-cafe", "stub-cinema", "bakery", "unknown"])
-        XCTAssertEqual(model.searchCount, 1)
+        await model.loadNearby(near: cafe.coordinate, kinds: [])
+        XCTAssertEqual(model.results.first?.id, "stub-cafe")
+        XCTAssertEqual(model.results.count, original.count)
+
+        await model.loadNearby(near: cafe.coordinate, kinds: ["Bars and nightlife"])
+        XCTAssertEqual(model.status, .empty)
+        XCTAssertTrue(model.isNearbyResults)
 
         model.query = "coffee"
         await model.submit()
         XCTAssertEqual(model.results, original)
-        XCTAssertNil(model.matchReason(for: cinema, interests: ["Film"]))
-        model.reprioritize(for: ["Food"])
-        XCTAssertEqual(model.results, original)
+        XCTAssertFalse(model.isNearbyResults)
+        XCTAssertEqual(model.searchCount, 5)
+    }
+
+    func testSavedInterestsFromBeforeKindsStillWork() {
+        XCTAssertEqual(Preferences.kinds(from: ["Food", "Art"]), ["Restaurants", "Cafés and bakeries", "Culture"])
+        XCTAssertEqual(Preferences.kinds(from: ["Film", "Outdoors", "Gone"]), ["Film", "Outdoors"])
+        XCTAssertTrue(Preferences.categories(for: []).isEmpty)
+        XCTAssertEqual(Set(Preferences.categories(for: ["Film"])), [.movieTheater])
     }
 
     func testSummaryShowsCategoryAndStreetInsteadOfFullAddress() {
