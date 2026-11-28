@@ -295,86 +295,6 @@ final class SearchModel {
     }
 }
 
-#if compiler(>=6.4.2)
-/// Reads the hinge angle from UIKit, which SwiftUI's `onHingeChange` doesn't expose, and turns how fast
-/// it's moving into how frosted the Duo's left page should be: 0 is clear, 1 is fully frosted.
-@available(iOS 27.1, *)
-private struct HingeReader: UIViewRepresentable {
-    /// Called with the frost amount and the animation to reach it.
-    let onFrost: (Double, Animation) -> Void
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.isUserInteractionEnabled = false
-        let coordinator = context.coordinator
-        view.addInteraction(UIHingeInteraction { _, update in
-            MainActor.assumeIsolated { coordinator.update(update.hinge) }
-        })
-        return view
-    }
-
-    func updateUIView(_ view: UIView, context: Context) {
-        context.coordinator.onFrost = onFrost
-    }
-
-    @MainActor
-    final class Coordinator {
-        /// How long the angle must hold still before the frost clears.
-        static let restDelay: Duration = .milliseconds(200)
-        /// Angle changes under about half a degree are sensor noise, not motion.
-        static let jitter: CGFloat = 0.009
-        /// Hinge speed that frosts the page fully, in radians a second (about 115° a second).
-        static let fullFrostSpeed = 2.0
-
-        var onFrost: (Double, Animation) -> Void = { _, _ in }
-        private var lastMove: (angle: CGFloat, time: ContinuousClock.Instant)?
-        private var speed = 0.0
-        private var rest: Task<Void, Never>?
-
-        func update(_ hinge: UIHinge?) {
-            guard let hinge, hinge.status != .closed else {
-                stop()
-                onFrost(hinge == nil ? 0 : 1, .easeOut(duration: 0.2))
-                return
-            }
-            let now = ContinuousClock.now
-            guard let lastMove else {
-                lastMove = (hinge.angle, now)
-                clearWhenStill()
-                return
-            }
-            // Measure from the last real move, so slow turns add up past the noise threshold.
-            let delta = abs(hinge.angle - lastMove.angle)
-            guard delta > Self.jitter else { return }
-            let elapsed = now - lastMove.time
-            let seconds = max(Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18, 1 / 120)
-            speed = speed * 0.5 + Double(delta) / seconds * 0.5
-            self.lastMove = (hinge.angle, now)
-            onFrost(min(1, speed / Self.fullFrostSpeed), .linear(duration: 0.12))
-            clearWhenStill()
-        }
-
-        private func clearWhenStill() {
-            rest?.cancel()
-            rest = Task { [weak self] in
-                try? await Task.sleep(for: Self.restDelay)
-                guard let self, !Task.isCancelled else { return }
-                speed = 0
-                onFrost(0, .easeInOut(duration: 0.35))
-            }
-        }
-
-        private func stop() {
-            rest?.cancel()
-            lastMove = nil
-            speed = 0
-        }
-    }
-}
-#endif
-
 private enum Selection: Hashable {
     case sample(FeedEntry.ID)
     case live(LivePlace.ID)
@@ -391,10 +311,7 @@ private struct FeedView: View {
     /// when the load failed, found nothing, or had no location.
     var onFirstLoad: (_ found: Bool) -> Void = { _ in }
     private let entries = FeedEntry.samples
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openURL) private var openURL
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
@@ -412,20 +329,12 @@ private struct FeedView: View {
     @State private var railCamera: MapCameraPosition = .automatic
     @State private var featuredCardRipple = 0
     @State private var mapCardRipple = 0
-    /// How frosted the Duo's left page is, from 0 (clear) to 1, following how fast the hinge moves.
-    @State private var railFrost = 0.0
     @State private var compactFeedWidth: CGFloat?
     /// Width from the window's leading edge to the Duo fold, so the inner display splits like an open book.
     @State private var foldOffset: CGFloat?
 
     private var palette: SalioPalette {
         appearance.palette(for: colorScheme)
-    }
-
-    private var railMapRevealKey: String {
-        if let live = selectedLive { return "live-\(live.id)" }
-        if let sample = selectedSample { return "sample-\(sample.id)" }
-        return "initial"
     }
 
     private var selectedSample: FeedEntry? {
@@ -440,50 +349,16 @@ private struct FeedView: View {
         return search.results.first { $0.id == id }
     }
 
-    private var allowsUnfoldMotion: Bool {
-        !reduceMotion && !voiceOver && contrast != .increased
-    }
-
-    @ViewBuilder var body: some View {
-        // Build without hinge support on toolchains that predate the Duo SDK.
-        #if compiler(>=6.4.2)
-        if #available(iOS 27.1, *) {
-            splitView
-                .background {
-                    HingeReader { frost, animation in
-                        withAnimation(animation) { railFrost = frost }
-                    }
-                }
-        } else {
-            splitView
-        }
-        #else
-        splitView
-        #endif
-    }
-
-    private var splitView: some View {
+    var body: some View {
         Group {
             if let foldOffset {
                 // Open Duo: two pages meet at the fold, and the right page keeps the cover's feed.
                 HStack(spacing: 0) {
-                    let frost = allowsUnfoldMotion ? railFrost : 0
-                    let frosted = frost > 0.05
                     NavigationStack {
                         placeContext.navigationBarTitleDisplayMode(.inline)
                     }
-                    .accessibilityHidden(frosted)
-                    // One frosted layer over the whole left page, title and map included, as thick as the hinge is fast.
-                    .overlay {
-                        Rectangle()
-                            .fill(.thinMaterial)
-                            .opacity(frost)
-                            .ignoresSafeArea()
-                            .allowsHitTesting(frosted)
-                            .accessibilityHidden(true)
-                    }
                     .frame(width: foldOffset)
-                    // Nothing on the left page, ASCII veil included, may draw past the fold while folding.
+                    // Nothing on the left page may draw past the fold while folding.
                     // The mask runs full height so the page can still reach under the status bar.
                     .mask { Rectangle().ignoresSafeArea(edges: .vertical) }
                     NavigationStack { feedPage }
@@ -544,7 +419,6 @@ private struct FeedView: View {
         Group {
             if showMap, search.status == .results {
                 placesMap
-                    .mapBlurReveal(palette: palette, trigger: showMap)
                     .safeAreaInset(edge: .bottom) {
                         if let place = selectedLive {
                             FrostedGlassCard(
@@ -977,8 +851,6 @@ private struct FeedView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 railMap
-                    // Already showing when the opening tears onto it, so it only reveals a new selection.
-                    .mapBlurReveal(palette: palette, trigger: railMapRevealKey, revealsOnAppear: false)
                     .frame(height: foldOffset == nil ? 180 : 240)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay(
