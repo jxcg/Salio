@@ -522,17 +522,22 @@ struct AsciiLoader: View {
 /// Motion, VoiceOver and Increase Contrast.
 struct AsciiRadar: View {
     let palette: SalioPalette
-    /// Whether rings go out. Off once someone draws on the grid, so their trail has it to itself.
-    var pulses = true
+    /// Whether a finger is on the grid. A ring already out finishes; no new one starts until a moment after it lifts.
+    var holding = false
+    /// Where the finger has drawn, in this view's coordinates. A passing ring bends round the finger and lights these.
+    var touches: [CGPoint] = []
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.colorSchemeContrast) private var contrast
-    /// When the first ring left, a moment after the grid appears, so the opening and the words land first.
+    /// When the current run of rings began, or nil while the radar rests: for a moment after the grid
+    /// appears, so the opening and the words land first, and while someone draws.
     @State private var start: Date?
+    @State private var hasPulsed = false
 
     private static let cell: CGFloat = 14
-    private static let delay: Duration = .seconds(2.5)
+    /// The wait before the first ring, and before rings come back once a finger lifts.
+    private static let delay: TimeInterval = 2.5, resume: TimeInterval = 1.5
     /// Each ring takes `sweep` seconds to leave the frame, then the radar rests before the next.
     private static let sweep: TimeInterval = 2.2, rest: TimeInterval = 0.8
     /// The ring's depth in cells, and how long a place stays lit after the ring passes it.
@@ -541,15 +546,26 @@ struct AsciiRadar: View {
     private static let you = 0, lit = 2, place = 3
 
     var body: some View {
-        let animates = pulses && start != nil && !reduceMotion && !voiceOver && contrast != .increased
+        let animates = start != nil && !reduceMotion && !voiceOver && contrast != .increased
         // 30 fps is plenty: the ring moves a whole cell at a time.
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animates)) { timeline in
             let phase = start.map { timeline.date.timeIntervalSince($0).truncatingRemainder(dividingBy: Self.sweep + Self.rest) }
             Canvas { context, size in draw(in: context, size: size, phase: animates ? phase : nil) }
         }
-        .task {
-            try? await Task.sleep(for: Self.delay)
-            start = .now
+        .task(id: holding) {
+            do {
+                // A ring already out finishes, with its lit places, before the radar rests.
+                if let start {
+                    let period = Self.sweep + Self.rest
+                    let into = Date.now.timeIntervalSince(start).truncatingRemainder(dividingBy: period)
+                    try await Task.sleep(for: .seconds(period - into))
+                    self.start = nil
+                }
+                guard !holding else { return }
+                try await Task.sleep(for: .seconds(hasPulsed ? Self.resume : Self.delay))
+                start = .now
+                hasPulsed = true
+            } catch {}
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -566,6 +582,12 @@ struct AsciiRadar: View {
         let reach = hypot(Double(columns), Double(rows)) / 2 + Self.band
         func ring(at time: TimeInterval) -> Double { (1 - pow(1 - min(time / Self.sweep, 1), 2)) * reach }
         let radius = phase.map { $0 < Self.sweep ? ring(at: $0) : -1 } ?? -1
+        // The cells the finger drew on, and the latest point, which the ring bulges out around.
+        func cellOf(_ point: CGPoint) -> (row: Int, col: Int) {
+            (Int((point.y - inset.y) / cell), Int((point.x - inset.x) / cell))
+        }
+        let drawn = Set(touches.map { cellOf($0) }.map { $0.row * columns + $0.col })
+        let finger = touches.last.map(cellOf)
 
         var dots = Path(), trail = Path(), front = Path(), places = Path(), signal = Path()
         for row in 0..<rows {
@@ -593,9 +615,14 @@ struct AsciiRadar: View {
                     continue
                 }
 
+                // Near the finger the ring arrives early, so it bulges out round it like water round a stone.
+                let bend = finger.map { 2.5 * exp(-(pow(Double(col - $0.col), 2) + pow(Double(row - $0.row), 2)) / 6) } ?? 0
                 // Inside the ring the characters thin out from `*` at its edge to `.` behind it.
-                let behind = radius - distance
-                if behind >= 0, behind < Self.band, Double((hash >> 8) % 100) / 100 > behind / Self.band * 0.7 {
+                let behind = radius - distance + bend
+                if behind >= 0, behind < Self.band, drawn.contains(row * columns + col) {
+                    // The ring lights the trail it crosses.
+                    signal.addPath(AsciiReveal.glyphs[1], transform: at)
+                } else if behind >= 0, behind < Self.band, Double((hash >> 8) % 100) / 100 > behind / Self.band * 0.7 {
                     let level = min(2 + Int(behind / Self.band * 6), AsciiReveal.ramp.count - 1)
                     if level < 4 {
                         front.addPath(AsciiReveal.glyphs[level], transform: at)
@@ -722,8 +749,8 @@ struct AsciiRoute: View {
 /// Contrast, and nothing redraws once the trail has faded.
 struct AsciiTouchTrail: ViewModifier {
     let palette: SalioPalette
-    /// Called when a finger first lands on the grid.
-    var onTouch: () -> Void = {}
+    /// Called as the finger lands, moves and lifts, with whether it's down and the points it has drawn.
+    var onChange: (_ touching: Bool, _ points: [CGPoint]) -> Void = { _, _ in }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -763,21 +790,23 @@ struct AsciiTouchTrail: ViewModifier {
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { drag in
-                    if finger == nil {
-                        touches += 1
-                        onTouch()
-                    }
+                    let landed = finger == nil
+                    if landed { touches += 1 }
                     finger = drag.location
                     release = nil
                     // A new character only once the finger has moved most of a cell.
                     if trail.last.map({ hypot($0.point.x - drag.location.x, $0.point.y - drag.location.y) > Self.cell * 0.6 }) ?? true {
                         trail.append((drag.location, .now))
                         trail.removeFirst(max(trail.count - 48, 0))
+                        onChange(true, trail.map(\.point))
+                    } else if landed {
+                        onChange(true, trail.map(\.point))
                     }
                 }
                 .onEnded { drag in
                     finger = nil
                     release = (drag.location, .now)
+                    onChange(false, trail.map(\.point))
                 },
             isEnabled: enabled
         )
@@ -788,6 +817,7 @@ struct AsciiTouchTrail: ViewModifier {
             try? await Task.sleep(for: .seconds(max(Self.life, Self.spread)))
             trail = []
             release = nil
+            onChange(false, [])
         }
     }
 

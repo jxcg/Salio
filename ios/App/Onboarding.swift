@@ -26,8 +26,9 @@ struct OnboardingView: View {
     /// The scroll area's height and the current screen's words, so the grid can fill what's left.
     @State private var viewport: CGFloat = 0
     @State private var wordsHeight: CGFloat = 0
-    /// Set once someone draws on the welcome grid, which stops its rings.
-    @State private var drewOnArt = false
+    /// Whether a finger is on the grid, and where it has drawn, so the welcome radar can make way for it.
+    @State private var drawing = false
+    @State private var drawn: [CGPoint] = []
     /// Whether there's content scrolled past the top or bottom edge; only then does that edge fade.
     @State private var hidden: (above: Bool, below: Bool) = (false, false)
     @AppStorage(SalioAppearance.storageKey) private var appearance: SalioAppearance = .mistGlass
@@ -130,7 +131,7 @@ struct OnboardingView: View {
                 "Somewhere worth going, nearby.",
                 "Salio shows places within walking distance that suit what you’re after. Everything stays on this device."
             )
-            art(AsciiRadar(palette: palette, pulses: !drewOnArt))
+            art(AsciiRadar(palette: palette, holding: drawing, touches: drawn))
         }
     }
 
@@ -237,7 +238,7 @@ struct OnboardingView: View {
         if room >= 96 {
             content
                 .frame(height: min(room, 340))
-                .modifier(AsciiTouchTrail(palette: palette) { drewOnArt = true })
+                .modifier(AsciiTouchTrail(palette: palette) { drawing = $0; drawn = $1 })
                 .padding(.top, 12)
         }
     }
