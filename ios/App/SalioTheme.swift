@@ -547,10 +547,12 @@ struct AsciiRadar: View {
 
     var body: some View {
         let animates = start != nil && !reduceMotion && !voiceOver && contrast != .increased
+        // Only a ring in flight reads the trail; at rest the grid ignores it, so drawing doesn't redraw the grid.
+        let touches = animates ? touches : []
         // 30 fps is plenty: the ring moves a whole cell at a time.
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animates)) { timeline in
             let phase = start.map { timeline.date.timeIntervalSince($0).truncatingRemainder(dividingBy: Self.sweep + Self.rest) }
-            Canvas { context, size in draw(in: context, size: size, phase: animates ? phase : nil) }
+            Canvas { context, size in draw(in: context, size: size, phase: animates ? phase : nil, touches: touches) }
         }
         .task(id: holding) {
             do {
@@ -572,7 +574,7 @@ struct AsciiRadar: View {
     }
 
     /// Draws one frame; `phase` is the time into the current sweep, or nil for the still frame.
-    private func draw(in context: GraphicsContext, size: CGSize, phase: TimeInterval?) {
+    private func draw(in context: GraphicsContext, size: CGSize, phase: TimeInterval?, touches: [CGPoint]) {
         let cell = Self.cell
         let columns = Int(size.width / cell), rows = Int(size.height / cell)
         guard columns > 2, rows > 2 else { return }
@@ -771,9 +773,9 @@ struct AsciiRoute: View {
 }
 
 /// Lets someone draw on an ASCII grid. A finger leaves a trail of the opening's characters that thins
-/// from `@` to `.` as it fades, a glass ring with the opening's colour split rides under the finger,
-/// and letting go sends that ring outward. Nothing happens under Reduce Motion, VoiceOver or Increase
-/// Contrast, and nothing redraws once the trail has faded.
+/// from `@` to `.` as it fades, with a faint red and blue split on the newest characters, like the
+/// opening's glass. Only the trail redraws, at 30 fps, and only until it has faded. Nothing happens
+/// under Reduce Motion, VoiceOver or Increase Contrast.
 struct AsciiTouchTrail: ViewModifier {
     let palette: SalioPalette
     /// Called as the finger lands, moves and lifts, with whether it's down and the points it has drawn.
@@ -784,78 +786,53 @@ struct AsciiTouchTrail: ViewModifier {
     @Environment(\.colorSchemeContrast) private var contrast
     /// Recent finger positions, oldest first.
     @State private var trail: [(point: CGPoint, time: Date)] = []
-    @State private var finger: CGPoint?
-    /// Where and when the finger lifted, so the ring can spread out from there.
-    @State private var release: (point: CGPoint, time: Date)?
+    @State private var touching = false
     @State private var touches = 0
 
     private static let cell: CGFloat = 14
-    /// How long a trail character lasts, and how long the released ring takes to spread out.
-    private static let life: TimeInterval = 0.7, spread: TimeInterval = 0.55
+    /// How long a trail character lasts.
+    private static let life: TimeInterval = 0.7
 
     func body(content: Content) -> some View {
         let enabled = !reduceMotion && !voiceOver && contrast != .increased
-        TimelineView(.animation(paused: finger == nil && trail.isEmpty && release == nil)) { timeline in
-            let now = timeline.date
-            let lens = lens(at: now)
-            content
-                .overlay { Canvas { context, size in draw(in: context, size: size, now: now) } }
-                // Opaque, so the shader can split colours across the characters' edges.
-                .background(Color("LaunchBackground"))
-                .visualEffect { view, _ in
-                    view.layerEffect(
-                        ShaderLibrary.frostedRefraction(
-                            .float2(lens.origin), .float(lens.radius), .float(40),
-                            .float(lens.strength), .float(1.4), .float(2.2)
-                        ),
-                        maxSampleOffset: CGSize(width: 20, height: 20),
-                        isEnabled: lens.strength > 0
-                    )
+        content
+            // Only the trail sits in the timeline, so the grid underneath doesn't redraw with it.
+            .overlay {
+                TimelineView(.animation(minimumInterval: 1.0 / 30, paused: trail.isEmpty)) { timeline in
+                    Canvas { context, size in draw(in: context, size: size, now: timeline.date) }
                 }
-        }
-        .contentShape(.rect)
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { drag in
-                    let landed = finger == nil
-                    if landed { touches += 1 }
-                    finger = drag.location
-                    release = nil
-                    // A new character only once the finger has moved most of a cell.
-                    if trail.last.map({ hypot($0.point.x - drag.location.x, $0.point.y - drag.location.y) > Self.cell * 0.6 }) ?? true {
-                        trail.append((drag.location, .now))
-                        trail.removeFirst(max(trail.count - 48, 0))
-                        onChange(true, trail.map(\.point))
-                    } else if landed {
-                        onChange(true, trail.map(\.point))
+                .allowsHitTesting(false)
+            }
+            .contentShape(.rect)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { drag in
+                        if !touching {
+                            touching = true
+                            touches += 1
+                            onChange(true, trail.map(\.point))
+                        }
+                        // A new character only once the finger has moved most of a cell.
+                        if trail.last.map({ hypot($0.point.x - drag.location.x, $0.point.y - drag.location.y) > Self.cell * 0.6 }) ?? true {
+                            trail.append((drag.location, .now))
+                            trail.removeFirst(max(trail.count - 48, 0))
+                            onChange(true, trail.map(\.point))
+                        }
                     }
-                }
-                .onEnded { drag in
-                    finger = nil
-                    release = (drag.location, .now)
-                    onChange(false, trail.map(\.point))
-                },
-            isEnabled: enabled
-        )
-        .sensoryFeedback(.impact(weight: .light), trigger: touches)
-        // Lets the timeline pause again once everything has faded.
-        .task(id: finger == nil ? release?.time : nil) {
-            guard finger == nil, !trail.isEmpty || release != nil else { return }
-            try? await Task.sleep(for: .seconds(max(Self.life, Self.spread)))
-            trail = []
-            release = nil
-            onChange(false, [])
-        }
-    }
-
-    /// The glass ring: a small breathing ring under the finger, or one spreading out from where it lifted.
-    private func lens(at now: Date) -> (origin: CGPoint, radius: Double, strength: Double) {
-        if let finger {
-            return (finger, 22 + 6 * sin(now.timeIntervalSinceReferenceDate * 7), 0.7)
-        }
-        guard let release else { return (.zero, 0, 0) }
-        let progress = min(now.timeIntervalSince(release.time) / Self.spread, 1)
-        return (release.point, 22 + (1 - pow(1 - progress, 2)) * 220, (1 - progress) * 0.85)
+                    .onEnded { _ in
+                        touching = false
+                        onChange(false, trail.map(\.point))
+                    },
+                isEnabled: enabled
+            )
+            .sensoryFeedback(.impact(weight: .light), trigger: touches)
+            // Clears the trail once it has faded, so the timeline pauses.
+            .task(id: touching ? nil : trail.last?.time) {
+                guard !touching, !trail.isEmpty else { return }
+                try? await Task.sleep(for: .seconds(Self.life))
+                trail = []
+                onChange(false, [])
+            }
     }
 
     /// Stamps each trail point onto the grid cell under it, newest on top, thinning with age.
@@ -883,6 +860,13 @@ struct AsciiTouchTrail: ViewModifier {
         // Each character covers the grid dot under it instead of sitting on top of it.
         context.fill(clear, with: .color(Color("LaunchBackground")))
         context.fill(tail, with: .color(palette.muted))
+        // A faint red and blue ghost either side of the newest characters stands in for the glass's
+        // colour split, without a shader pass over the grid.
+        var shifted = context
+        shifted.translateBy(x: -1.5, y: 0)
+        shifted.fill(front, with: .color(.red.opacity(0.35)))
+        shifted.translateBy(x: 3, y: 0)
+        shifted.fill(front, with: .color(.blue.opacity(0.35)))
         context.fill(front, with: .color(palette.signal))
     }
 }
